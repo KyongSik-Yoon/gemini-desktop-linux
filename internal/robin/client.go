@@ -262,9 +262,21 @@ func (c *Client) ReportClientPresence(ctx context.Context) error {
 	return err
 }
 
+// SessionHooks는 원격 도구 세션 상태 변화를 데몬에 알리기 위한 선택적 콜백 집합이다.
+type SessionHooks struct {
+	OnToolCallStart func()
+	OnToolCallEnd   func()
+	OnIdle          func(idle bool)
+}
+
 // ExecuteRemoteToolsSession은 WakeUpEvent 수신 시 양방향 gRPC 스트림을 열어 도구 호출을 처리하고,
 // 멀티턴 대화를 위해 서버가 활성 세션을 유지하는 동안 스트림을 자동 갱신한다.
 func (c *Client) ExecuteRemoteToolsSession(ctx context.Context, sessionRoutingKey, routingToken string) error {
+	return c.ExecuteRemoteToolsSessionWithHooks(ctx, sessionRoutingKey, routingToken, SessionHooks{})
+}
+
+// ExecuteRemoteToolsSessionWithHooks는 상태 추적 훅과 함께 양방향 gRPC 원격 도구 세션을 실행한다.
+func (c *Client) ExecuteRemoteToolsSessionWithHooks(ctx context.Context, sessionRoutingKey, routingToken string, hooks SessionHooks) error {
 	const (
 		maxErrorRetries = 3
 		maxIdleRenewals = 15 // 유휴 스트림 최대 갱신 횟수 (약 60분, 이후에는 ClientSync 힌트나 WakeUp으로 재진입)
@@ -278,7 +290,7 @@ func (c *Client) ExecuteRemoteToolsSession(ctx context.Context, sessionRoutingKe
 			return ctx.Err()
 		}
 
-		outcome, hadToolCalls, grpcStatus, err := c.runSingleRemoteToolStream(ctx, sessionRoutingKey, currentToken)
+		outcome, hadToolCalls, grpcStatus, err := c.runSingleRemoteToolStream(ctx, sessionRoutingKey, currentToken, hooks)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -298,6 +310,9 @@ func (c *Client) ExecuteRemoteToolsSession(ctx context.Context, sessionRoutingKe
 					fmt.Printf("[robin] 장시간 유휴 세션 대기 종료 -> 다음 신호 대기 (routing_key=%s)\n", sessionRoutingKey)
 					return nil
 				}
+			}
+			if hooks.OnIdle != nil {
+				hooks.OnIdle(true)
 			}
 			fmt.Printf("[robin] 멀티턴 세션 유지를 위해 스트림 재연결 대기 (routing_key=%s, idle=%d/%d)\n", sessionRoutingKey, idleRenewals, maxIdleRenewals)
 			select {
@@ -338,7 +353,7 @@ const (
 	streamNoActiveSession
 )
 
-func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKey, routingToken string) (streamOutcome, bool, string, error) {
+func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKey, routingToken string, hooks SessionHooks) (streamOutcome, bool, string, error) {
 	token, err := c.authMgr.AccessToken(ctx)
 	if err != nil {
 		return streamError, false, "", err
@@ -473,6 +488,12 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 		if len(ev.FunctionCalls) > 0 {
 			hadHealthyActivity = true
 			hadToolCalls = true
+			if hooks.OnIdle != nil {
+				hooks.OnIdle(false)
+			}
+			if hooks.OnToolCallStart != nil {
+				hooks.OnToolCallStart()
+			}
 			stateMu.Lock()
 			inToolExecution = true
 			stateMu.Unlock()
@@ -516,6 +537,9 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 				stateMu.Lock()
 				inToolExecution = false
 				stateMu.Unlock()
+				if hooks.OnToolCallEnd != nil {
+					hooks.OnToolCallEnd()
+				}
 				return streamError, hadToolCalls, "", fmt.Errorf("도구 실행 결과 전송 실패: %w", err)
 			}
 			fmt.Printf("[robin] 도구 실행 결과 %d건 응답 완료\n", len(results))
@@ -524,6 +548,9 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 			inToolExecution = false
 			deferred := rolloverDeferred
 			stateMu.Unlock()
+			if hooks.OnToolCallEnd != nil {
+				hooks.OnToolCallEnd()
+			}
 			if deferred {
 				fmt.Printf("[robin] 지연된 240초 롤오버 실행 -> 스트림 갱신 (routing_key=%s)\n", sessionRoutingKey)
 				return streamRenewAcrossTurns, hadToolCalls, "0", nil

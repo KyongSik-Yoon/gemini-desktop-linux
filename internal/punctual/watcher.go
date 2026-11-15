@@ -13,7 +13,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/sam/gemini-remote-linux/internal/auth"
 	"github.com/sam/gemini-remote-linux/internal/proto"
@@ -22,6 +26,11 @@ import (
 const (
 	SignalerBaseURL = "https://signaler-pa.googleapis.com"
 	PunctualProject = "assistant-bard"
+
+	// Signaler MultiWatch 구독이 서버 측에서 약 20분 만에 묵시 만료되므로 12분마다 선제 회전한다.
+	DefaultSessionMaxAge          = 12 * time.Minute
+	DefaultReadWatchdogTimeout    = 90 * time.Second
+	DefaultPunctualWatchdogTimeout = 3 * time.Minute
 )
 
 // Handler는 WakeUpEvent가 도착했을 때 호출되는 콜백이다.
@@ -29,19 +38,69 @@ type Handler func(ctx context.Context, ev *proto.WakeUpEvent)
 
 // Watcher는 signaler-pa.googleapis.com의 Punctual WebChannel V8 스트림을 구독한다.
 type Watcher struct {
-	authMgr    *auth.Manager
-	deviceID   string
-	httpClient *http.Client
+	authMgr         *auth.Manager
+	deviceID        string
+	httpClient      *http.Client
+	baseURL         string
+	sessionMaxAge   time.Duration
+	readTimeout     time.Duration
+	punctualTimeout time.Duration
 }
 
 func NewWatcher(authMgr *auth.Manager, deviceID string) *Watcher {
+	tr := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	if h2Tr, err := http2.ConfigureTransports(tr); err == nil {
+		// 유휴 H2 TCP 연결 단절 감지를 위해 30초 유휴 시 PING 전송
+		h2Tr.ReadIdleTimeout = 30 * time.Second
+		h2Tr.PingTimeout = 15 * time.Second
+	}
 	return &Watcher{
 		authMgr:  authMgr,
 		deviceID: deviceID,
 		httpClient: &http.Client{
-			Timeout: 0, // 스트리밍 BackChannel을 위해 타임아웃 해제
+			Transport: tr,
+			Timeout:   0, // 스트리밍 BackChannel을 위해 타임아웃 해제
 		},
+		baseURL:         SignalerBaseURL,
+		sessionMaxAge:   DefaultSessionMaxAge,
+		readTimeout:     DefaultReadWatchdogTimeout,
+		punctualTimeout: DefaultPunctualWatchdogTimeout,
 	}
+}
+
+func (w *Watcher) effectiveBaseURL() string {
+	if w.baseURL != "" {
+		return w.baseURL
+	}
+	return SignalerBaseURL
+}
+
+func (w *Watcher) effectiveSessionMaxAge() time.Duration {
+	if w.sessionMaxAge > 0 {
+		return w.sessionMaxAge
+	}
+	return DefaultSessionMaxAge
+}
+
+func (w *Watcher) effectiveReadTimeout() time.Duration {
+	if w.readTimeout > 0 {
+		return w.readTimeout
+	}
+	return DefaultReadWatchdogTimeout
+}
+
+func (w *Watcher) effectivePunctualTimeout() time.Duration {
+	if w.punctualTimeout > 0 {
+		return w.punctualTimeout
+	}
+	return DefaultPunctualWatchdogTimeout
 }
 
 // Run은 컨텍스트 취소 시까지 지수 백오프로 Punctual WebChannel 연결을 유지한다.
@@ -63,7 +122,7 @@ func (w *Watcher) Run(ctx context.Context, handler Handler) error {
 			backoff = 2 * time.Second
 		}
 		if err == nil {
-			fmt.Printf("[punctual] 세션 주기적 갱신(40분) 도래 -> 새 WebChannel 세션 즉시 연결\n")
+			fmt.Printf("[punctual] 세션 선제 갱신 주기(%v) 도래 -> 새 WebChannel 세션 즉시 연결\n", w.effectiveSessionMaxAge())
 			continue
 		}
 		fmt.Printf("[punctual] 스트림 연결 종료 (%v), %v 후 재연결...\n", err, backoff)
@@ -79,8 +138,11 @@ func (w *Watcher) Run(ctx context.Context, handler Handler) error {
 }
 
 func (w *Watcher) chooseServer(ctx context.Context, token string) (string, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
 	reqBytes := proto.EncodeChooseServerRequest(PunctualProject, "bard-client-sync")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, SignalerBaseURL+"/punctual/v1/chooseServer", bytes.NewReader(reqBytes))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, w.effectiveBaseURL()+"/punctual/v1/chooseServer", bytes.NewReader(reqBytes))
 	if err != nil {
 		return "", err
 	}
@@ -88,8 +150,7 @@ func (w *Watcher) chooseServer(ctx context.Context, token string) (string, error
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := w.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -102,8 +163,8 @@ func (w *Watcher) chooseServer(ctx context.Context, token string) (string, error
 }
 
 func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
-	// OAuth 액세스 토큰(1시간 수명) 만료 전 새 MultiWatch 세션을 맺기 위해 40분마다 세션을 선제 회전한다.
-	ctx, cancel := context.WithTimeout(parentCtx, 40*time.Minute)
+	// Signaler MultiWatch 구독이 약 20분 만에 묵시 만료되므로 만료 도래 전 선제 회전한다.
+	ctx, cancel := context.WithTimeout(parentCtx, w.effectiveSessionMaxAge())
 	defer cancel()
 
 	token, err := w.authMgr.AccessToken(ctx)
@@ -124,7 +185,7 @@ func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 	formBody := fmt.Sprintf("count=1&ofs=0&req0___data__=%s", url.QueryEscape(b64Batch))
 
 	fwdURL := fmt.Sprintf("%s/punctual/multi-watch/channel?VER=8&gsessionid=%s&RID=%d&CVER=22&zx=%s&t=1",
-		SignalerBaseURL, url.QueryEscape(gsessionID), rid, zx)
+		w.effectiveBaseURL(), url.QueryEscape(gsessionID), rid, zx)
 
 	fwdReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fwdURL, strings.NewReader(formBody))
 	if err != nil {
@@ -151,12 +212,15 @@ func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 	}
 	fmt.Printf("[punctual] WebChannel 세션 연결됨 (gsessionid=%s, SID=%s)\n", gsessionID, sid)
 
-	// Step 2: BackChannel GET 스트리밍 루프
+	// Step 2: BackChannel GET 스트리밍 루프 (BackChannel 재연결 간에도 마지막 Punctual 활성 시각을 유지)
+	var lastPunctualNano atomic.Int64
+	lastPunctualNano.Store(time.Now().UnixNano())
+
 	aid := 0
 	for {
 		if ctx.Err() != nil {
 			if parentCtx.Err() == nil {
-				return nil // 40분 주기 계획된 세션 회전
+				return nil // 계획된 세션 회전
 			}
 			return parentCtx.Err()
 		}
@@ -166,7 +230,7 @@ func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 		}
 
 		backURL := fmt.Sprintf("%s/punctual/multi-watch/channel?VER=8&gsessionid=%s&SID=%s&RID=rpc&CI=0&AID=%d&TYPE=xmlhttp&zx=%s&t=1",
-			SignalerBaseURL, url.QueryEscape(gsessionID), url.QueryEscape(sid), aid, randomZX())
+			w.effectiveBaseURL(), url.QueryEscape(gsessionID), url.QueryEscape(sid), aid, randomZX())
 
 		backReq, err := http.NewRequestWithContext(ctx, http.MethodGet, backURL, nil)
 		if err != nil {
@@ -189,7 +253,7 @@ func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 			return fmt.Errorf("BackChannel HTTP %d: %s", backResp.StatusCode, string(b))
 		}
 
-		newAID, streamErr := w.consumeBackChannel(parentCtx, backResp.Body, aid, handler)
+		newAID, streamErr := w.consumeBackChannel(parentCtx, backResp.Body, aid, &lastPunctualNano, handler)
 		backResp.Body.Close()
 		aid = newAID
 		if ctx.Err() != nil && parentCtx.Err() == nil {
@@ -201,40 +265,90 @@ func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 	}
 }
 
-func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadCloser, lastAID int, handler Handler) (int, error) {
+func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadCloser, lastAID int, lastPunctualNano *atomic.Int64, handler Handler) (int, error) {
 	reader := bufio.NewReaderSize(body, 64*1024)
 	aid := lastAID
 
-	// WebChannel은 약 25~30초마다 ["noop"] 하트비트를 보내므로 90초간 수신이 없으면 좀비 연결로 간주해 닫는다.
+	if lastPunctualNano == nil {
+		lastPunctualNano = &atomic.Int64{}
+	}
+	if lastPunctualNano.Load() == 0 {
+		lastPunctualNano.Store(time.Now().UnixNano())
+	}
+
+	readTimeout := w.effectiveReadTimeout()
+	punctualTimeout := w.effectivePunctualTimeout()
+
+	elapsed := time.Since(time.Unix(0, lastPunctualNano.Load()))
+	initialPunctualWait := punctualTimeout - elapsed
+	if elapsed < 0 {
+		initialPunctualWait = punctualTimeout
+	} else if initialPunctualWait <= 0 {
+		initialPunctualWait = time.Millisecond
+	}
+
+	// 전송 계층(["noop"] 포함) 읽기 워치독과 Punctual 활성 프레임(WatchStart/ChangeBatch/Checkpoint) 워치독을 분리해 감시한다.
 	doneCh := make(chan struct{})
 	defer close(doneCh)
-	activityCh := make(chan struct{}, 1)
+	readActivityCh := make(chan struct{}, 1)
+	punctualActivityCh := make(chan struct{}, 1)
+
+	var watchdogMu sync.Mutex
+	var watchdogErr error
+	setWatchdogErr := func(err error) {
+		watchdogMu.Lock()
+		if watchdogErr == nil {
+			watchdogErr = err
+		}
+		watchdogMu.Unlock()
+	}
+
+	resetTimer := func(t *time.Timer, d time.Duration) {
+		if !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+		t.Reset(d)
+	}
+
 	go func() {
-		timer := time.NewTimer(90 * time.Second)
-		defer timer.Stop()
+		readTimer := time.NewTimer(readTimeout)
+		punctualTimer := time.NewTimer(initialPunctualWait)
+		defer readTimer.Stop()
+		defer punctualTimer.Stop()
 		for {
 			select {
 			case <-doneCh:
 				return
-			case <-activityCh:
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(90 * time.Second)
-			case <-timer.C:
-				fmt.Printf("[punctual] BackChannel 90초 읽기 타임아웃 감지 -> 스트림 강제 재연결\n")
+			case <-readActivityCh:
+				resetTimer(readTimer, readTimeout)
+			case <-punctualActivityCh:
+				resetTimer(punctualTimer, punctualTimeout)
+			case <-readTimer.C:
+				fmt.Printf("[punctual] BackChannel %v 읽기 타임아웃 감지 -> 스트림 강제 재연결\n", readTimeout)
+				setWatchdogErr(fmt.Errorf("BackChannel %v 읽기 타임아웃(좀비 연결)", readTimeout))
+				_ = body.Close()
+				return
+			case <-punctualTimer.C:
+				fmt.Printf("[punctual] Punctual 구독 %v 무응답(좀비 구독) 감지 -> 새 세션 재구독\n", punctualTimeout)
+				setWatchdogErr(fmt.Errorf("Punctual 구독 %v 무응답(좀비 구독)", punctualTimeout))
 				_ = body.Close()
 				return
 			}
 		}
 	}()
 
-	touchActivity := func() {
+	touchRead := func() {
 		select {
-		case activityCh <- struct{}{}:
+		case readActivityCh <- struct{}{}:
+		default:
+		}
+	}
+	touchPunctual := func() {
+		select {
+		case punctualActivityCh <- struct{}{}:
 		default:
 		}
 	}
@@ -243,9 +357,15 @@ func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadClo
 		// WebChannel 청크는 "<길이>\n<JSON 페이로드>" 또는 줄 단위 JSON 배열로 도착한다.
 		line, err := reader.ReadString('\n')
 		if err != nil {
+			watchdogMu.Lock()
+			wErr := watchdogErr
+			watchdogMu.Unlock()
+			if wErr != nil {
+				return aid, wErr
+			}
 			return aid, err
 		}
-		touchActivity()
+		touchRead()
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -255,9 +375,15 @@ func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadClo
 		if length, lerr := strconv.Atoi(trimmed); lerr == nil && length > 0 {
 			buf := make([]byte, length)
 			if _, rerr := io.ReadFull(reader, buf); rerr != nil {
+				watchdogMu.Lock()
+				wErr := watchdogErr
+				watchdogMu.Unlock()
+				if wErr != nil {
+					return aid, wErr
+				}
 				return aid, rerr
 			}
-			touchActivity()
+			touchRead()
 			chunk = string(buf)
 		} else if strings.HasPrefix(trimmed, "[") {
 			chunk = trimmed
@@ -271,7 +397,11 @@ func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadClo
 		}
 		reconnectNeeded := shouldStop
 		for _, p := range payloads {
-			changes, needsReconnect, err := proto.DecodeMultiWatchResponseBatch(p)
+			changes, hasWatchActivity, needsReconnect, err := proto.DecodeMultiWatchResponseBatchWithActivity(p)
+			if hasWatchActivity {
+				lastPunctualNano.Store(time.Now().UnixNano())
+				touchPunctual()
+			}
 			if needsReconnect {
 				reconnectNeeded = true
 			}

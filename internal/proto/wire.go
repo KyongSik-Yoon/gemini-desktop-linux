@@ -1075,11 +1075,20 @@ func parseObjectChange(streamID int64, data []byte) (PunctualObjectChange, bool)
 
 // DecodeMultiWatchResponseBatch는 MultiWatchResponseBatch에서 모든 ObjectChange와 재연결 필요 여부를 추출한다.
 func DecodeMultiWatchResponseBatch(data []byte) ([]PunctualObjectChange, bool, error) {
+	changes, _, needsReconnect, err := DecodeMultiWatchResponseBatchWithActivity(data)
+	return changes, needsReconnect, err
+}
+
+// DecodeMultiWatchResponseBatchWithActivity는 MultiWatchResponseBatch에서 ObjectChange 목록과
+// Punctual WatchResponse 레벨의 정상 활성 프레임(WatchStart/ChangeBatch/Checkpoint) 수신 여부,
+// 그리고 스트림 에러/종료로 인한 재연결 필요 여부를 함께 추출한다.
+func DecodeMultiWatchResponseBatchWithActivity(data []byte) ([]PunctualObjectChange, bool, bool, error) {
 	fields, err := ParseFields(data)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	var out []PunctualObjectChange
+	hasWatchActivity := false
 	needsReconnect := false
 	for _, f := range fields {
 		if f.Num == 1 && f.WireType == WireBytes { // MultiWatchResponse
@@ -1093,8 +1102,10 @@ func DecodeMultiWatchResponseBatch(data []byte) ([]PunctualObjectChange, bool, e
 					for _, w := range wf {
 						switch w.Num {
 						case 1: // WatchStart
+							hasWatchActivity = true
 							fmt.Printf("[punctual] 스트림 시작 확인 (stream=%d)\n", streamID)
 						case 2: // ChangeBatch { 1: repeated ObjectChange }
+							hasWatchActivity = true
 							if w.WireType == WireBytes {
 								cbf, _ := ParseFields(w.Bytes)
 								matched := false
@@ -1113,7 +1124,8 @@ func DecodeMultiWatchResponseBatch(data []byte) ([]PunctualObjectChange, bool, e
 								}
 							}
 						case 3: // Checkpoint / Watermark (주기적 동기화 지점)
-							// 정상적인 주기적 체크포인트이므로 세션을 유지한다.
+							// 정상적인 주기적 체크포인트이므로 세션을 유지하고 Punctual 활성 신호로 기록한다.
+							hasWatchActivity = true
 						case 4, 5: // error (4) or done (5) -> com.google.rpc.Status
 							if w.WireType == WireBytes {
 								sf, _ := ParseFields(w.Bytes)
@@ -1137,5 +1149,5 @@ func DecodeMultiWatchResponseBatch(data []byte) ([]PunctualObjectChange, bool, e
 			}
 		}
 	}
-	return out, needsReconnect, nil
+	return out, hasWatchActivity, needsReconnect, nil
 }

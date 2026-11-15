@@ -115,3 +115,42 @@ func TestDecodeMultiWatchResponseBatch(t *testing.T) {
 		t.Fatalf("ObjectChange 필드 불일치: %+v", changes[0])
 	}
 }
+
+func TestDecodeMultiWatchResponseBatchWithActivity(t *testing.T) {
+	// Case 1: Checkpoint (WatchResponse field 3)만 포함된 배치 -> hasWatchActivity=true, needsReconnect=false
+	cpWatchResp := NewBuilder()
+	cpWatchResp.AppendBytes(3, []byte{0x08, 0x01})
+	cpMultiResp := NewBuilder()
+	cpMultiResp.AppendInt64Always(1, 1)
+	cpMultiResp.AppendMessage(2, cpWatchResp.Bytes())
+	cpBatch := NewBuilder()
+	cpBatch.AppendMessage(1, cpMultiResp.Bytes())
+
+	changes, hasActivity, needsReconnect, err := DecodeMultiWatchResponseBatchWithActivity(cpBatch.Bytes())
+	if err != nil {
+		t.Fatalf("Checkpoint 디코딩 실패: %v", err)
+	}
+	if !hasActivity || needsReconnect || len(changes) != 0 {
+		t.Fatalf("Checkpoint 판정 불일치: activity=%v, reconnect=%v, len=%d", hasActivity, needsReconnect, len(changes))
+	}
+
+	// Case 2: WatchError (WatchResponse field 4, stream=2)만 포함된 배치 -> hasWatchActivity=false, needsReconnect=true
+	errStatus := NewBuilder()
+	errStatus.AppendInt32Always(1, 13)
+	errStatus.AppendString(2, "internal error")
+	errWatchResp := NewBuilder()
+	errWatchResp.AppendMessage(4, errStatus.Bytes())
+	errMultiResp := NewBuilder()
+	errMultiResp.AppendInt64Always(1, 2)
+	errMultiResp.AppendMessage(2, errWatchResp.Bytes())
+	errBatch := NewBuilder()
+	errBatch.AppendMessage(1, errMultiResp.Bytes())
+
+	changes, hasActivity, needsReconnect, err = DecodeMultiWatchResponseBatchWithActivity(errBatch.Bytes())
+	if err != nil {
+		t.Fatalf("WatchError 디코딩 실패: %v", err)
+	}
+	if hasActivity || !needsReconnect || len(changes) != 0 {
+		t.Fatalf("WatchError 판정 불일치: activity=%v, reconnect=%v, len=%d", hasActivity, needsReconnect, len(changes))
+	}
+}

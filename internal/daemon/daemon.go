@@ -21,10 +21,11 @@ import (
 
 // Daemon은 RegisterDevice, 주기적 ReportClientPresence, Punctual WakeUp 수신, ExecuteRemoteTools 스트림을 총괄한다.
 type Daemon struct {
-	cfg      *config.Config
-	authMgr  *auth.Manager
-	robinCli *robin.Client
-	watcher  *punctual.Watcher
+	cfg           *config.Config
+	authMgr       *auth.Manager
+	robinCli      *robin.Client
+	watcher       *punctual.Watcher
+	sessionRunner func(ctx context.Context, routingKey, routingToken string, hooks robin.SessionHooks) error
 
 	sessionMu      sync.Mutex
 	activeSessions map[string]*sessionEntry
@@ -32,8 +33,15 @@ type Daemon struct {
 }
 
 type sessionEntry struct {
-	id     uint64
-	cancel context.CancelFunc
+	id            uint64
+	cancel        context.CancelFunc
+	startedAt     time.Time
+	routingToken  string
+	isIdle        bool
+	hadToolCall   bool
+	inToolCall    bool
+	pendingWakeUp bool
+	pendingToken  string
 }
 
 var nextSessionSeq uint64
@@ -59,6 +67,7 @@ func New(cfg *config.Config, authMgr *auth.Manager) *Daemon {
 		authMgr:        authMgr,
 		robinCli:       robinCli,
 		watcher:        watcher,
+		sessionRunner:  robinCli.ExecuteRemoteToolsSessionWithHooks,
 		activeSessions: make(map[string]*sessionEntry),
 		lastHintProbe:  make(map[string]time.Time),
 	}
@@ -66,6 +75,13 @@ func New(cfg *config.Config, authMgr *auth.Manager) *Daemon {
 
 func (d *Daemon) RobinClient() *robin.Client {
 	return d.robinCli
+}
+
+func (d *Daemon) runSession(ctx context.Context, routingKey, routingToken string, hooks robin.SessionHooks) error {
+	if d.sessionRunner != nil {
+		return d.sessionRunner(ctx, routingKey, routingToken, hooks)
+	}
+	return d.robinCli.ExecuteRemoteToolsSessionWithHooks(ctx, routingKey, routingToken, hooks)
 }
 
 // Serve는 데몬 메인 루프를 실행한다.
@@ -104,66 +120,139 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	}()
 
 	// Punctual WebChannel 실시간 감시 루프
-	return d.watcher.Run(ctx, func(ctx context.Context, ev *proto.WakeUpEvent) {
-		if ev.SessionRoutingKey == "" {
-			return
-		}
-		if ev.IsClientSyncHint {
-			sessionCtx, seq, ok := d.tryStartSessionFromHint(ctx, ev.SessionRoutingKey)
-			if !ok {
-				return
-			}
-			defer d.releaseSession(ev.SessionRoutingKey, seq)
-			fmt.Printf("[daemon] ClientSync 대화방 힌트로 세션 복구 시도 (routing_key=%s, seq=%d)\n", ev.SessionRoutingKey, seq)
-			if err := d.robinCli.ExecuteRemoteToolsSession(sessionCtx, ev.SessionRoutingKey, ""); err != nil {
-				fmt.Printf("[daemon] 대화방 힌트 세션 종료 (routing_key=%s): %v\n", ev.SessionRoutingKey, err)
-			}
-			return
-		}
-		sessionCtx, seq := d.startOrReplaceSession(ctx, ev.SessionRoutingKey)
-		defer d.releaseSession(ev.SessionRoutingKey, seq)
-		fmt.Printf("[daemon] WakeUp 수신 -> 원격 도구 세션 시작 (routing_key=%s, seq=%d)\n", ev.SessionRoutingKey, seq)
-		if err := d.robinCli.ExecuteRemoteToolsSession(sessionCtx, ev.SessionRoutingKey, ev.RoutingToken); err != nil {
-			fmt.Printf("[daemon] 원격 도구 세션 오류 (routing_key=%s): %v\n", ev.SessionRoutingKey, err)
-		}
-	})
+	return d.watcher.Run(ctx, d.handleWakeUpEvent)
 }
 
-func (d *Daemon) tryStartSessionFromHint(parent context.Context, routingKey string) (context.Context, uint64, bool) {
+func (d *Daemon) handleWakeUpEvent(ctx context.Context, ev *proto.WakeUpEvent) {
+	if ev == nil || ev.SessionRoutingKey == "" {
+		return
+	}
+	if ev.IsClientSyncHint {
+		sessionCtx, entry, ok := d.tryStartSessionFromHint(ctx, ev.SessionRoutingKey)
+		if !ok {
+			return
+		}
+		defer d.releaseSession(ev.SessionRoutingKey, entry.id)
+		fmt.Printf("[daemon] ClientSync 대화방 힌트로 세션 복구 시도 (routing_key=%s, seq=%d)\n", ev.SessionRoutingKey, entry.id)
+		d.runSessionLoop(ctx, sessionCtx, ev.SessionRoutingKey, entry, "")
+		return
+	}
+
+	sessionCtx, entry, ok := d.acquireWakeUpSession(ctx, ev.SessionRoutingKey, ev.RoutingToken)
+	if !ok {
+		return
+	}
+	defer d.releaseSession(ev.SessionRoutingKey, entry.id)
+	fmt.Printf("[daemon] WakeUp 수신 -> 원격 도구 세션 시작 (routing_key=%s, seq=%d)\n", ev.SessionRoutingKey, entry.id)
+	d.runSessionLoop(ctx, sessionCtx, ev.SessionRoutingKey, entry, ev.RoutingToken)
+}
+
+func (d *Daemon) runSessionLoop(parentCtx, sessionCtx context.Context, routingKey string, entry *sessionEntry, initialToken string) {
+	hooks := robin.SessionHooks{
+		OnToolCallStart: func() {
+			d.sessionMu.Lock()
+			entry.hadToolCall = true
+			entry.inToolCall = true
+			entry.isIdle = false
+			entry.pendingWakeUp = false
+			entry.pendingToken = ""
+			d.sessionMu.Unlock()
+		},
+		OnToolCallEnd: func() {
+			d.sessionMu.Lock()
+			entry.inToolCall = false
+			d.sessionMu.Unlock()
+		},
+		OnIdle: func(idle bool) {
+			d.sessionMu.Lock()
+			entry.isIdle = idle
+			d.sessionMu.Unlock()
+		},
+	}
+
+	currentToken := initialToken
+	for {
+		err := d.runSession(sessionCtx, routingKey, currentToken, hooks)
+		d.sessionMu.Lock()
+		hadToolCall := entry.hadToolCall
+		resumePending := !hadToolCall && entry.pendingWakeUp && parentCtx.Err() == nil && sessionCtx.Err() == nil
+		nextToken := entry.pendingToken
+		if resumePending {
+			entry.pendingWakeUp = false
+			entry.pendingToken = ""
+			entry.startedAt = time.Now()
+			if nextToken != "" {
+				entry.routingToken = nextToken
+			}
+		}
+		d.sessionMu.Unlock()
+
+		if err != nil {
+			if currentToken == "" && !hadToolCall {
+				fmt.Printf("[daemon] 대화방 힌트 세션 종료 (routing_key=%s): %v\n", routingKey, err)
+			} else {
+				fmt.Printf("[daemon] 원격 도구 세션 오류 (routing_key=%s): %v\n", routingKey, err)
+			}
+		}
+		if !resumePending {
+			return
+		}
+		fmt.Printf("[daemon] 조기 종료된 힌트 세션에 보류된 WakeUp 승계 실행 (routing_key=%s, seq=%d)\n", routingKey, entry.id)
+		currentToken = nextToken
+	}
+}
+
+func (d *Daemon) tryStartSessionFromHint(parent context.Context, routingKey string) (context.Context, *sessionEntry, bool) {
 	d.sessionMu.Lock()
 	defer d.sessionMu.Unlock()
 	if prev, exists := d.activeSessions[routingKey]; exists && prev != nil {
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if last, ok := d.lastHintProbe[routingKey]; ok && time.Since(last) < 3*time.Second {
-		return nil, 0, false
+		return nil, nil, false
 	}
 	d.lastHintProbe[routingKey] = time.Now()
 	nextSessionSeq++
 	seq := nextSessionSeq
 	sessionCtx, cancel := context.WithCancel(parent)
-	d.activeSessions[routingKey] = &sessionEntry{
-		id:     seq,
-		cancel: cancel,
+	entry := &sessionEntry{
+		id:        seq,
+		cancel:    cancel,
+		startedAt: time.Now(),
 	}
-	return sessionCtx, seq, true
+	d.activeSessions[routingKey] = entry
+	return sessionCtx, entry, true
 }
 
-func (d *Daemon) startOrReplaceSession(parent context.Context, routingKey string) (context.Context, uint64) {
+func (d *Daemon) acquireWakeUpSession(parent context.Context, routingKey, routingToken string) (context.Context, *sessionEntry, bool) {
 	d.sessionMu.Lock()
 	defer d.sessionMu.Unlock()
 	if prev, exists := d.activeSessions[routingKey]; exists && prev != nil {
-		fmt.Printf("[daemon] 새 WakeUp 수신 -> 기존 대기 스트림 교체 (routing_key=%s)\n", routingKey)
+		// 멀티턴 유휴 대기 중이거나 15초 이상 응답 없는 무토큰 세션일 때만 기존 세션을 교체한다.
+		// 초기 핸드셰이크/도구 실행 중인 세션을 덮어쓰면 서버가 첫 스트림으로 보낸 첫 턴 도구 호출이 유실된다.
+		shouldReplace := prev.isIdle || (!prev.inToolCall && !prev.hadToolCall && prev.routingToken == "" && routingToken != "" && time.Since(prev.startedAt) >= 15*time.Second)
+		if !shouldReplace {
+			prev.pendingWakeUp = true
+			if routingToken != "" {
+				prev.pendingToken = routingToken
+			}
+			fmt.Printf("[daemon] 활성/핸드셰이크 세션 보호 -> 후속 WakeUp 보류 (routing_key=%s, seq=%d, idle=%v)\n", routingKey, prev.id, prev.isIdle)
+			return nil, nil, false
+		}
+		fmt.Printf("[daemon] 유휴 대기 스트림 교체 -> 새 WakeUp 세션 시작 (routing_key=%s, prev_seq=%d)\n", routingKey, prev.id)
 		prev.cancel()
 	}
 	nextSessionSeq++
 	seq := nextSessionSeq
 	sessionCtx, cancel := context.WithCancel(parent)
-	d.activeSessions[routingKey] = &sessionEntry{
-		id:     seq,
-		cancel: cancel,
+	entry := &sessionEntry{
+		id:           seq,
+		cancel:       cancel,
+		startedAt:    time.Now(),
+		routingToken: routingToken,
 	}
-	return sessionCtx, seq
+	d.activeSessions[routingKey] = entry
+	return sessionCtx, entry, true
 }
 
 func (d *Daemon) releaseSession(routingKey string, seq uint64) {
