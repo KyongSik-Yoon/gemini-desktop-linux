@@ -30,7 +30,7 @@ use ipc::{
     SearchHit, SearchResponse, ShareResponse, StreamEvent, TurnArtifact, TurnAttachment,
     UIPreferences, UsageInfo, UserProfile,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 use theme::{AppTheme, ThemeMode, font_medium, font_regular, font_semibold};
@@ -294,6 +294,8 @@ pub(crate) struct App {
     pub(crate) library_items: Vec<LibraryEntry>,
     pub(crate) library_filter: String,
     pub(crate) library_image_cache: HashMap<String, image::Handle>,
+    library_image_order: VecDeque<String>,
+    failed_image_keys: HashSet<String>,
 
     // 이미지 · 동영상 스튜디오 상태
     pub(crate) image_prompt_draft: String,
@@ -493,6 +495,7 @@ pub(crate) enum Message {
     ToggleCanvasRaw,
     CloseCanvasPreview,
     RunCanvasHtml(usize, usize),
+    RetryImageLoad(String, String),
     OpenFilePicker,
     FilesPicked(Result<Vec<PathBuf>, String>),
     StartScreenCapture,
@@ -575,6 +578,8 @@ impl App {
             library_items: Vec::new(),
             library_filter: "all".into(),
             library_image_cache: HashMap::new(),
+            library_image_order: VecDeque::new(),
+            failed_image_keys: HashSet::new(),
             image_prompt_draft: String::new(),
             image_aspect: "1:1".into(),
             image_style: "실사".into(),
@@ -1079,13 +1084,27 @@ impl App {
             }
             Message::LibraryLoaded(Err(_)) => Task::none(),
             Message::LibraryImageLoaded(id, Ok(bytes)) => {
-                if !bytes.is_empty() {
-                    self.library_image_cache
-                        .insert(id, image::Handle::from_bytes(bytes));
+                if bytes.is_empty() {
+                    self.failed_image_keys.insert(id);
+                } else {
+                    self.failed_image_keys.remove(&id);
+                    self.cache_library_image(id, image::Handle::from_bytes(bytes));
                 }
                 Task::none()
             }
-            Message::LibraryImageLoaded(_, Err(_)) => Task::none(),
+            Message::LibraryImageLoaded(id, Err(_)) => {
+                self.failed_image_keys.insert(id);
+                Task::none()
+            }
+            Message::RetryImageLoad(key, url) => {
+                self.failed_image_keys.remove(&key);
+                if url.trim().is_empty() {
+                    return Task::none();
+                }
+                Task::perform(ipc::fetch_library_image(url), move |r| {
+                    Message::LibraryImageLoaded(key, r)
+                })
+            }
             Message::PreferencesLoaded(Ok(prefs)) => {
                 if !prefs.selected_model_id.is_empty() {
                     self.selected_model_id = Some(prefs.selected_model_id);
@@ -2454,14 +2473,37 @@ impl App {
                     self.is_streaming = false;
                     self.stream_abort_handle = None;
                     if !self.temporary_chat {
-                        Task::batch([
+                        let mut tasks = vec![
                             Task::perform(
                                 ipc::list_conversations(60),
                                 Message::ConversationsLoaded,
                             ),
                             Task::perform(ipc::list_library(), Message::LibraryLoaded),
                             Self::scroll_to_bottom(),
-                        ])
+                        ];
+                        // 방금 완료된 응답에 생성 이미지 플레이스홀더나 미보강 Canvas 칩이 있으면
+                        // 최신 턴을 재조회해 실제 생성 이미지 URL·아티팩트를 즉시 렌더링한다.
+                        let needs_turn_refresh = self.messages.last().is_some_and(|m| {
+                            m.role == Role::Model
+                                && ((m
+                                    .raw_text
+                                    .contains("googleusercontent.com/image_generation_content/")
+                                    && m.generated_images.is_empty())
+                                    || (m
+                                        .raw_text
+                                        .contains("googleusercontent.com/immersive_entry_chip/")
+                                        && m.artifacts.is_empty()))
+                        });
+                        if needs_turn_refresh
+                            && let Some(conv_id) = self.active_conv_id.clone()
+                        {
+                            let id_cb = conv_id.clone();
+                            tasks.push(Task::perform(
+                                ipc::list_turns(conv_id, 50),
+                                move |res| Message::TurnsLoaded(id_cb, res),
+                            ));
+                        }
+                        Task::batch(tasks)
                     } else {
                         Self::scroll_to_bottom()
                     }
@@ -2479,6 +2521,11 @@ impl App {
             },
             Message::AbortStream => {
                 self.cancel_active_stream();
+                if let Some(last) = self.messages.last_mut()
+                    && last.role == Role::Model
+                {
+                    last.aborted = true;
+                }
                 if let Some(conv_id) = self.active_conv_id.clone()
                     && !self.streaming_req_id.is_empty()
                 {
@@ -2646,6 +2693,21 @@ impl App {
             handle.abort();
         }
         self.is_streaming = false;
+    }
+
+    /// 이미지 캐시 크기를 최대 96개로 제한해 장시간 사용 시 메모리 누적을 방지한다.
+    fn cache_library_image(&mut self, key: String, handle: image::Handle) {
+        const MAX_IMAGE_CACHE_ENTRIES: usize = 96;
+        if let Some(pos) = self.library_image_order.iter().position(|k| k == &key) {
+            self.library_image_order.remove(pos);
+        }
+        self.library_image_cache.insert(key.clone(), handle);
+        self.library_image_order.push_back(key);
+        while self.library_image_order.len() > MAX_IMAGE_CACHE_ENTRIES {
+            if let Some(oldest) = self.library_image_order.pop_front() {
+                self.library_image_cache.remove(&oldest);
+            }
+        }
     }
 
     fn apply_chunk(&mut self, ch: &ChatStreamChunk, is_done: bool) {
@@ -4787,6 +4849,7 @@ impl App {
                     generated_images: &[],
                     artifacts: &[],
                     image_cache: &self.library_image_cache,
+                    failed_images: &self.failed_image_keys,
                 },
             );
             container(
@@ -6637,6 +6700,7 @@ impl App {
                             generated_images: &msg.generated_images,
                             artifacts: &msg.artifacts,
                             image_cache: &self.library_image_cache,
+                            failed_images: &self.failed_image_keys,
                         },
                     );
                     content = content.push(md_view);

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -138,13 +139,20 @@ func (c *Client) GetUserProfile(ctx context.Context) (*UserProfile, error) {
 	return prof, nil
 }
 
-// FetchAvatarBytes는 프로필 사진 URL에서 이미지 바이트와 Content-Type을 다운로드한다.
+// FetchAvatarBytes는 허용된 Google 이미지 호스트에서 프로필 사진 바이트와 Content-Type을 안전하게 다운로드한다.
 func (c *Client) FetchAvatarBytes(ctx context.Context, pictureURL string) ([]byte, string, error) {
-	if strings.TrimSpace(pictureURL) == "" {
-		return nil, "", fmt.Errorf("아바타 URL이 비어 있습니다")
+	parsed, err := url.Parse(strings.TrimSpace(pictureURL))
+	if err != nil || parsed.Scheme != "https" {
+		return nil, "", fmt.Errorf("허용되지 않는 아바타 URL입니다")
 	}
-	httpCli := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pictureURL, nil)
+	if !isAllowedGoogleImageHost(parsed.Hostname()) {
+		return nil, "", fmt.Errorf("허용되지 않는 아바타 호스트입니다: %s", parsed.Hostname())
+	}
+	httpCli := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: checkGoogleImageRedirect,
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, "", err
 	}

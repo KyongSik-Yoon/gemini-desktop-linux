@@ -1,6 +1,7 @@
 package robin
 
 import (
+	"context"
 	"net/http"
 	"testing"
 )
@@ -62,5 +63,19 @@ func TestCheckGoogleImageRedirect(t *testing.T) {
 	tooMany := make([]*http.Request, 5)
 	if err := checkGoogleImageRedirect(req, tooMany); err == nil {
 		t.Fatalf("리다이렉트 5회 초과가 차단되지 않음")
+	}
+}
+
+func TestFetchAvatarBytesRejectsUnsafeURLs(t *testing.T) {
+	cli := &Client{}
+	for _, bad := range []string{
+		"",
+		"http://lh3.googleusercontent.com/avatar.png",
+		"https://evil.example.com/avatar.png",
+		"file:///etc/passwd",
+	} {
+		if _, _, err := cli.FetchAvatarBytes(context.Background(), bad); err == nil {
+			t.Fatalf("비허용 아바타 URL이 통과됨: %q", bad)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::Message;
 use crate::i18n::{Locale, t};
@@ -23,6 +23,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) generated_images: &'a [GeneratedImage],
     pub(crate) artifacts: &'a [TurnArtifact],
     pub(crate) image_cache: &'a HashMap<String, image::Handle>,
+    pub(crate) failed_images: &'a HashSet<String>,
 }
 
 /// 마크다운 원문을 일반 마크다운·커스텀 GFM 표·생성 이미지·Canvas 플레이스홀더 블록으로 분할 보관한다.
@@ -1826,6 +1827,60 @@ impl GeminiMarkdownViewer {
             )
             .padding(6)
             .width(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg_thought)),
+                border: Border {
+                    radius: iced::border::Radius {
+                        top_left: 13.0,
+                        top_right: 13.0,
+                        bottom_right: 0.0,
+                        bottom_left: 0.0,
+                    },
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            })
+            .into()
+        } else if ctx.failed_images.contains(&cache_key) {
+            let retry_key = cache_key.clone();
+            let retry_url = img_meta.url.clone();
+            container(
+                column![
+                    row![
+                        Icon::Image.view(18.0, text_secondary),
+                        text(t(loc, "이미지를 불러올 수 없습니다"))
+                            .size(13)
+                            .color(text_secondary),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    button(text(t(loc, "다시 시도")).size(12).color(accent))
+                        .on_press(Message::RetryImageLoad(retry_key, retry_url))
+                        .padding([5, 12])
+                        .style(move |_, status| {
+                            let hovered = matches!(status, button::Status::Hovered);
+                            button::Style {
+                                background: Some(Background::Color(if hovered {
+                                    bg_hover
+                                } else {
+                                    bg_card
+                                })),
+                                text_color: accent,
+                                border: Border {
+                                    radius: 8.0.into(),
+                                    width: 1.0,
+                                    color: border_col,
+                                },
+                                ..button::Style::default()
+                            }
+                        }),
+                ]
+                .spacing(10)
+                .align_x(Alignment::Center),
+            )
+            .width(Fill)
+            .height(Length::Fixed(150.0))
+            .center(Fill)
             .style(move |_| container::Style {
                 background: Some(Background::Color(bg_thought)),
                 border: Border {

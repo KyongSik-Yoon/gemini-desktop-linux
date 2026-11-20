@@ -1071,6 +1071,20 @@ pub async fn abort_generation(conv_id: String, req_id: String) -> Result<(), Str
     Ok(())
 }
 
+/// 바이트 버퍼에서 `\n` 단위로 완성된 한 줄을 꺼내 UTF-8 문자열로 디코딩한다.
+/// 청크 경계에서 멀티바이트 UTF-8 문자가 분할되어도 깨지지 않도록 바이트 단위로 누적한 뒤 디코딩한다.
+fn take_next_utf8_line(pending: &mut Vec<u8>) -> Option<String> {
+    let nl = pending.iter().position(|&b| b == b'\n')?;
+    let mut raw: Vec<u8> = pending.drain(..=nl).collect();
+    if raw.last() == Some(&b'\n') {
+        raw.pop();
+    }
+    if raw.last() == Some(&b'\r') {
+        raw.pop();
+    }
+    Some(String::from_utf8_lossy(&raw).into_owned())
+}
+
 /// Chunked 또는 Plain HTTP 바디에서 SSE 이벤트를 실시간 스트리밍으로 방출한다.
 pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
     stream::channel(64, move |mut tx: iced::futures::channel::mpsc::Sender<StreamEvent>| async move {
@@ -1101,12 +1115,12 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
             return;
         }
 
-        let mut pending = String::new();
+        let mut pending: Vec<u8> = Vec::new();
         let mut cur_event = String::new();
         let mut cur_data = String::new();
 
         loop {
-            let piece = if chunked {
+            let piece: Vec<u8> = if chunked {
                 let mut size_line = String::new();
                 match reader.read_line(&mut size_line).await {
                     Ok(0) => break,
@@ -1133,7 +1147,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                         }
                         let mut crlf = [0u8; 2];
                         let _ = reader.read_exact(&mut crlf).await;
-                        String::from_utf8_lossy(&buf).into_owned()
+                        buf
                     }
                     Err(e) => {
                         let _ = tx.try_send(StreamEvent::Error(format!("스트림 읽기 오류: {e}")));
@@ -1141,8 +1155,8 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                     }
                 }
             } else {
-                let mut line = String::new();
-                match reader.read_line(&mut line).await {
+                let mut line = Vec::new();
+                match reader.read_until(b'\n', &mut line).await {
                     Ok(0) => break,
                     Ok(_) => line,
                     Err(e) => {
@@ -1152,11 +1166,8 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                 }
             };
 
-            pending.push_str(&piece);
-            while let Some(nl) = pending.find('\n') {
-                let line = pending[..nl].trim_end_matches('\r').to_string();
-                pending.drain(..=nl);
-
+            pending.extend_from_slice(&piece);
+            while let Some(line) = take_next_utf8_line(&mut pending) {
                 if line.is_empty() {
                     if !cur_data.is_empty() {
                         let ev = std::mem::take(&mut cur_event);
@@ -1204,12 +1215,12 @@ pub fn stream_remote_events() -> impl Stream<Item = RemoteEvent> {
                     send_http_request("GET", "/v1/remote/events", None).await
                     && status < 400
                 {
-                    let mut pending = String::new();
+                    let mut pending: Vec<u8> = Vec::new();
                     let mut cur_event = String::new();
                     let mut cur_data = String::new();
 
                     loop {
-                        let piece = if chunked {
+                        let piece: Vec<u8> = if chunked {
                             let mut size_line = String::new();
                             match reader.read_line(&mut size_line).await {
                                 Ok(0) | Err(_) => break,
@@ -1227,22 +1238,19 @@ pub fn stream_remote_events() -> impl Stream<Item = RemoteEvent> {
                                     }
                                     let mut crlf = [0u8; 2];
                                     let _ = reader.read_exact(&mut crlf).await;
-                                    String::from_utf8_lossy(&buf).into_owned()
+                                    buf
                                 }
                             }
                         } else {
-                            let mut line = String::new();
-                            match reader.read_line(&mut line).await {
+                            let mut line = Vec::new();
+                            match reader.read_until(b'\n', &mut line).await {
                                 Ok(0) | Err(_) => break,
                                 Ok(_) => line,
                             }
                         };
 
-                        pending.push_str(&piece);
-                        while let Some(nl) = pending.find('\n') {
-                            let line = pending[..nl].trim_end_matches('\r').to_string();
-                            pending.drain(..=nl);
-
+                        pending.extend_from_slice(&piece);
+                        while let Some(line) = take_next_utf8_line(&mut pending) {
                             if line.is_empty() {
                                 if !cur_data.is_empty() {
                                     let ev = std::mem::take(&mut cur_event);
@@ -1290,5 +1298,21 @@ mod tests {
     fn url_encode_query_handles_korean_and_spaces() {
         assert_eq!(url_encode_query("abc 123"), "abc%20123");
         assert_eq!(url_encode_query("가"), "%EA%B0%80");
+    }
+
+    #[test]
+    fn 청크_경계_멀티바이트_utf8_줄_복원() {
+        let raw = "data: {\"text\":\"한글 스트리밍\"}\r\n\r\n".as_bytes();
+        // '한'(3바이트) 중간을 쪼개어 두 청크로 전달해도 손상 없이 복원되어야 한다.
+        let split_at = 17;
+        let mut pending = Vec::new();
+        pending.extend_from_slice(&raw[..split_at]);
+        assert!(take_next_utf8_line(&mut pending).is_none());
+
+        pending.extend_from_slice(&raw[split_at..]);
+        let line1 = take_next_utf8_line(&mut pending).expect("첫 줄이 추출되어야 함");
+        assert_eq!(line1, "data: {\"text\":\"한글 스트리밍\"}");
+        let line2 = take_next_utf8_line(&mut pending).expect("빈 구분 줄이 추출되어야 함");
+        assert_eq!(line2, "");
     }
 }

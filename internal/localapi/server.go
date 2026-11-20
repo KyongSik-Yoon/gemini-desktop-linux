@@ -667,6 +667,13 @@ func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// invalidateMediaCache는 새 이미지·미디어가 생성되었을 때 30초 미디어 캐시를 즉시 비운다.
+func (s *Server) invalidateMediaCache() {
+	s.mediaMu.Lock()
+	s.mediaCacheAt = time.Time{}
+	s.mediaMu.Unlock()
+}
+
 // getCachedMediaArtifacts는 생성 이미지 아티팩트 목록을 짧게(30초) 캐시해
 // 일반 대화 조회 시 불필요한 추가 RPC 지연을 방지한다.
 func (s *Server) getCachedMediaArtifacts(ctx context.Context, forceRefresh bool) []proto.AppArtifact {
@@ -888,6 +895,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		_ = writeSSE("error", map[string]string{"error": err.Error()})
 		return
 	}
+	// 새 응답이 완료되면 생성 이미지 캐시를 무효화해 직후 턴 조회에서 최신 이미지를 즉시 반영한다.
+	s.invalidateMediaCache()
 	if !params.Temporary && len(params.FilePaths) > 0 {
 		for _, fp := range params.FilePaths {
 			ext := strings.ToLower(filepath.Ext(fp))

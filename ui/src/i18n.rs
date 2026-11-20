@@ -485,6 +485,8 @@ pub fn t(locale: Locale, ko: &'static str) -> &'static str {
         "도구 활동 숨기기" => "Hide tool activity",
         "도구 활동 표시" => "Show tool activity",
         "이미지 불러오는 중..." => "Loading image...",
+        "이미지를 불러올 수 없습니다" => "Failed to load image",
+        "다시 시도" => "Retry",
         "생성된 이미지" => "Generated image",
         "원본 열기" => "Open image",
         "웹 Gemini에서 보기" => "View in Gemini web",
