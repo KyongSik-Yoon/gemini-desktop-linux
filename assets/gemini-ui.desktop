@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Gemini
+GenericName=AI Assistant
+GenericName[ko]=AI 어시스턴트
+Comment=Unofficial Gemini desktop client and remote PC control for Linux
+Comment[ko]=리눅스용 비공식 Gemini 데스크톱 및 원격 PC 제어 앱
+Exec=gemini-ui
+Icon=gemini-ui
+Terminal=false
+StartupNotify=true
+StartupWMClass=gemini-ui
+Categories=Network;Chat;
+Keywords=gemini;ai;chat;assistant;remote;

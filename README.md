@@ -32,29 +32,41 @@ Connect your Linux PC or workstation to Gemini (Mobile, Web, and the included na
   - Voice input: `pw-record` (PipeWire) or `arecord` (ALSA)
   - Korean text rendering: `Noto Sans CJK KR` (or any CJK sans-serif system font)
 
-## Build & Quick Start
+## Install & Quick Start
+
+### One-Command Install (Binaries + Desktop Launcher & Icon)
 
 ```bash
-# 1. Build the Go daemon
-go build -o gemini-remote ./cmd/gemini-remote
+./install.sh
+```
 
-# 2. Configure OAuth client credentials (from an existing Gemini desktop installation or ~/.config/gemini-remote/config.json)
-./gemini-remote extract-keys /path/to/Gemini.app
+`./install.sh` builds both `gemini-remote` and `gemini-ui`, installs them to `~/.local/bin/`, and registers the desktop launcher (`~/.local/share/applications/gemini-ui.desktop`) and app icon (`~/.local/share/icons/hicolor/scalable/apps/gemini-ui.svg`).
 
-# 3. Sign in with Google OAuth 2.0
-./gemini-remote login
+To remove installed binaries, desktop entry, icon, and systemd user service:
 
-# 4. Allow local workspace folders
-./gemini-remote folders add ~/dev/git-repo
-./gemini-remote folders add ~/Downloads
+```bash
+./uninstall.sh
+```
 
-# 5. Register your Linux machine and start the daemon
-./gemini-remote register
-./gemini-remote service install   # or `./gemini-remote serve` in the foreground
+### Initial Account & Daemon Setup
 
-# 6. Build and launch the native Rust GUI
-cargo build --release --manifest-path ui/Cargo.toml
-./ui/target/release/gemini-ui
+```bash
+# 1. Configure OAuth client credentials (from an existing Gemini desktop installation or ~/.config/gemini-remote/config.json)
+gemini-remote extract-keys /path/to/Gemini.app
+
+# 2. Sign in with Google OAuth 2.0
+gemini-remote login
+
+# 3. Allow local workspace folders
+gemini-remote folders add ~/dev/git-repo
+gemini-remote folders add ~/Downloads
+
+# 4. Register your Linux machine and start the daemon
+gemini-remote register
+gemini-remote service install   # or `gemini-remote serve` in the foreground
+
+# 5. Launch Gemini from your desktop app launcher (or run `gemini-ui`)
+gemini-ui
 ```
 
 ## License

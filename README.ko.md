@@ -32,29 +32,41 @@ Ubuntu, Arch, Fedora, Wayland/Hyprland, X11 환경에서 스마트폰·웹 브�
   - 음성 녹음: `pw-record` (PipeWire) 또는 `arecord` (ALSA)
   - 한글 렌더링: `Noto Sans CJK KR` (또는 시스템 CJK 폰트)
 
-## 빌드 및 실행
+## 설치 및 실행
+
+### 원커맨드 설치 (바이너리 + 앱 런처 `.desktop` · 아이콘)
 
 ```bash
-# 1. Go 데몬 빌드
-go build -o gemini-remote ./cmd/gemini-remote
+./install.sh
+```
 
-# 2. OAuth 클라이언트 자격증명 설정 (기존 Gemini 데스크톱 앱 경로 지정 또는 ~/.config/gemini-remote/config.json 설정)
-./gemini-remote extract-keys /path/to/Gemini.app
+`./install.sh`는 `gemini-remote` 데몬과 `gemini-ui` 릴리즈 바이너리를 빌드해 `~/.local/bin/`에 설치하고, 데스크톱 런처 항목(`~/.local/share/applications/gemini-ui.desktop`)과 앱 아이콘(`~/.local/share/icons/hicolor/scalable/apps/gemini-ui.svg`)을 자동 등록합니다.
 
-# 3. Google 계정 OAuth 2.0 로그인
-./gemini-remote login
+설치된 바이너리·런처 항목·아이콘·systemd 사용자 서비스를 제거하려면:
 
-# 4. 허용할 로컬 작업 폴더 추가
-./gemini-remote folders add ~/dev/git-repo
-./gemini-remote folders add ~/Downloads
+```bash
+./uninstall.sh
+```
 
-# 5. 기기 등록 및 데몬 실행
-./gemini-remote register
-./gemini-remote service install   # 또는 포그라운드 실행: ./gemini-remote serve
+### 초기 계정 및 데몬 설정
 
-# 6. 네이티브 Rust GUI 빌드 및 실행
-cargo build --release --manifest-path ui/Cargo.toml
-./ui/target/release/gemini-ui
+```bash
+# 1. OAuth 클라이언트 자격증명 설정 (기존 Gemini 데스크톱 앱 경로 지정 또는 ~/.config/gemini-remote/config.json 설정)
+gemini-remote extract-keys /path/to/Gemini.app
+
+# 2. Google 계정 OAuth 2.0 로그인
+gemini-remote login
+
+# 3. 허용할 로컬 작업 폴더 추가
+gemini-remote folders add ~/dev/git-repo
+gemini-remote folders add ~/Downloads
+
+# 4. 기기 등록 및 데몬 서비스 시작
+gemini-remote register
+gemini-remote service install   # 또는 포그라운드 실행: gemini-remote serve
+
+# 5. 앱 런처에서 "Gemini" 실행 (또는 터미널에서 `gemini-ui`)
+gemini-ui
 ```
 
 ## 라이선스
