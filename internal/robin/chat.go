@@ -47,7 +47,7 @@ func (c *Client) buildChatMetadata() []byte {
 
 // GetUserStatus는 현재 계정의 사용 가능한 Gemini 모델 목록과 피커 구성을 조회한다(60초 TTL 캐시 및 동시 호출 병합).
 func (c *Client) GetUserStatus(ctx context.Context) (*proto.UserStatusResult, error) {
-	return c.userStatusCache.GetOrDo(60*time.Second, func() (*proto.UserStatusResult, error) {
+	return c.userStatusCache.GetOrDo(ctx, 60*time.Second, func(ctx context.Context) (*proto.UserStatusResult, error) {
 		reqBytes := proto.EncodeGetUserStatusRequest(c.buildChatMetadata())
 		respBytes, err := c.invokeUnary(ctx, PathGetUserStatus, reqBytes)
 		if err != nil {
@@ -59,7 +59,7 @@ func (c *Client) GetUserStatus(ctx context.Context) (*proto.UserStatusResult, er
 
 // GetUserProfile은 OAuth userinfo와 GetUserStatus를 결합해 프로필 이름·이메일·아바타 URL·구독 티어를 반환한다(60초 TTL 캐시 및 동시 호출 병합).
 func (c *Client) GetUserProfile(ctx context.Context) (*UserProfile, error) {
-	return c.userProfileCache.GetOrDo(60*time.Second, func() (*UserProfile, error) {
+	return c.userProfileCache.GetOrDo(ctx, 60*time.Second, func(ctx context.Context) (*UserProfile, error) {
 		token, err := c.authMgr.AccessToken(ctx)
 		if err != nil {
 			return nil, err

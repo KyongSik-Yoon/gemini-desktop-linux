@@ -76,12 +76,13 @@ type UIPreferences struct {
 
 // WorkspaceStore는 노트북·예약 작업·라이브러리·UI 설정을 ~/.config/gemini-remote/ 하위에 영속 저장한다.
 type WorkspaceStore struct {
-	mu        sync.Mutex
-	dir       string
-	notebooks []Notebook
-	schedules []ScheduledTask
-	library   []LibraryEntry
-	prefs     UIPreferences
+	mu            sync.Mutex
+	dir           string
+	notebooks     []Notebook
+	schedules     []ScheduledTask
+	library       []LibraryEntry
+	prefs         UIPreferences
+	runningScheds map[string]bool
 }
 
 func newWorkspaceStore() *WorkspaceStore {
@@ -91,7 +92,10 @@ func newWorkspaceStore() *WorkspaceStore {
 		dir = filepath.Join(home, ".config", "gemini-remote")
 	}
 	_ = os.MkdirAll(dir, 0o700)
-	st := &WorkspaceStore{dir: dir}
+	st := &WorkspaceStore{
+		dir:           dir,
+		runningScheds: make(map[string]bool),
+	}
 	st.load()
 	return st
 }
@@ -223,11 +227,30 @@ func (st *WorkspaceStore) saveFileLocked(name string, src any) error {
 		return err
 	}
 	p := filepath.Join(st.dir, name)
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(st.dir, name+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	tmpPath := f.Name()
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, p); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // --- 노트북 ---
@@ -279,6 +302,10 @@ func (st *WorkspaceStore) DeleteNotebook(id string) error {
 		}
 	}
 	st.notebooks = filtered
+	if _, hadLinks := st.prefs.NotebookLinks[id]; hadLinks {
+		delete(st.prefs.NotebookLinks, id)
+		_ = st.saveFileLocked("ui_prefs.json", st.prefs)
+	}
 	return st.saveFileLocked("notebooks.json", st.notebooks)
 }
 
@@ -389,19 +416,36 @@ func (st *WorkspaceStore) ListLibrary() []LibraryEntry {
 }
 
 func (st *WorkspaceStore) AddLibraryEntry(entry LibraryEntry) {
+	st.AddLibraryEntries([]LibraryEntry{entry})
+}
+
+// AddLibraryEntries는 여러 라이브러리 항목을 단일 락·단일 파일 쓰기로 배치 저장한다.
+func (st *WorkspaceStore) AddLibraryEntries(entries []LibraryEntry) {
+	if len(entries) == 0 {
+		return
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if entry.ID == "" {
-		entry.ID = genID("lib")
+	now := time.Now().Unix()
+	for _, entry := range entries {
+		if entry.ID == "" {
+			entry.ID = genID("lib")
+		}
+		if entry.CreatedAtUnix == 0 {
+			entry.CreatedAtUnix = now
+		}
+		st.library = append(st.library, entry)
 	}
-	if entry.CreatedAtUnix == 0 {
-		entry.CreatedAtUnix = time.Now().Unix()
-	}
-	st.library = append(st.library, entry)
 	if len(st.library) > 200 {
 		st.library = st.library[len(st.library)-200:]
 	}
 	_ = st.saveFileLocked("library.json", st.library)
+}
+
+func (st *WorkspaceStore) finishScheduleRun(id string) {
+	st.mu.Lock()
+	delete(st.runningScheds, id)
+	st.mu.Unlock()
 }
 
 // RunScheduler는 데몬이 살아있는 동안 30초마다 예약 시각이 도래한 작업을 자동 실행한다.
@@ -421,6 +465,7 @@ func (st *WorkspaceStore) RunScheduler(ctx context.Context, robinCli *robin.Clie
 			for _, task := range due {
 				t := task
 				go func() {
+					defer st.finishScheduleRun(t.ID)
 					runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 					defer cancel()
 					final, err := robinCli.StreamQuery(runCtx, proto.ChatQueryParams{
@@ -440,30 +485,30 @@ func (st *WorkspaceStore) RunScheduler(ctx context.Context, robinCli *robin.Clie
 func (st *WorkspaceStore) collectDueSchedules(now time.Time) []ScheduledTask {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if st.runningScheds == nil {
+		st.runningScheds = make(map[string]bool)
+	}
 	hhmm := now.Format("15:04")
 	var due []ScheduledTask
 	for _, s := range st.schedules {
-		if !s.Enabled || strings.TrimSpace(s.Prompt) == "" {
+		if !s.Enabled || strings.TrimSpace(s.Prompt) == "" || st.runningScheds[s.ID] {
 			continue
 		}
 		last := time.Unix(s.LastRunUnix, 0)
+		matched := false
 		switch s.ScheduleType {
 		case "hourly":
-			if now.Sub(last) >= 59*time.Minute {
-				due = append(due, s)
-			}
+			matched = now.Sub(last) >= 59*time.Minute
 		case "weekly":
-			if s.TimeOfDay == hhmm && now.Sub(last) >= 6*24*time.Hour {
-				due = append(due, s)
-			}
+			matched = s.TimeOfDay == hhmm && now.Sub(last) >= 6*24*time.Hour
 		case "once":
-			if s.LastRunUnix == 0 && s.TimeOfDay == hhmm {
-				due = append(due, s)
-			}
+			matched = s.LastRunUnix == 0 && s.TimeOfDay == hhmm
 		default: // daily
-			if s.TimeOfDay == hhmm && (s.LastRunUnix == 0 || last.Format("2006-01-02") != now.Format("2006-01-02")) {
-				due = append(due, s)
-			}
+			matched = s.TimeOfDay == hhmm && (s.LastRunUnix == 0 || last.Format("2006-01-02") != now.Format("2006-01-02"))
+		}
+		if matched {
+			st.runningScheds[s.ID] = true
+			due = append(due, s)
 		}
 	}
 	return due

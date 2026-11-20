@@ -41,6 +41,11 @@ type Server struct {
 	mediaCache   []proto.AppArtifact
 	mediaCacheAt time.Time
 	mediaSF      singleflightGroup[[]proto.AppArtifact]
+
+	notebooksCache   ttlCache[[]proto.RemoteNotebook]
+	schedulesCache   ttlCache[[]proto.RemoteSchedule]
+	recommendedCache ttlCache[[]proto.RecommendedSchedule]
+	libraryCache     ttlCache[[]proto.AppArtifact]
 }
 
 func NewServer(cfg *config.Config, robinCli *robin.Client, sockPath string) *Server {
@@ -162,15 +167,15 @@ func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {
 	s.avatarMu.Unlock()
 
 	if len(cached) == 0 {
-		img, err := s.avatarSF.Do("avatar", func() (cachedImage, error) {
-			prof, err := s.robinCli.GetUserProfile(r.Context())
+		img, err := s.avatarSF.Do(r.Context(), "avatar", func(ctx context.Context) (cachedImage, error) {
+			prof, err := s.robinCli.GetUserProfile(ctx)
 			if err != nil {
 				return cachedImage{}, err
 			}
 			if prof.Picture == "" {
 				return cachedImage{}, os.ErrNotExist
 			}
-			data, contentType, err := s.robinCli.FetchAvatarBytes(r.Context(), prof.Picture)
+			data, contentType, err := s.robinCli.FetchAvatarBytes(ctx, prof.Picture)
 			if err != nil {
 				return cachedImage{}, err
 			}
@@ -300,7 +305,7 @@ func (s *Server) handleListNotebooks(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 
 	if s.robinCli != nil {
-		if remotes, err := s.robinCli.ListGeminiNotebooks(r.Context()); err == nil {
+		if remotes, err := s.notebooksCache.GetOrDo(r.Context(), 15*time.Second, s.robinCli.ListGeminiNotebooks); err == nil {
 			for _, rn := range remotes {
 				nb := Notebook{
 					ID:              rn.ID,
@@ -340,6 +345,7 @@ func (s *Server) handleUpsertNotebook(w http.ResponseWriter, r *http.Request) {
 		if createdRemote, err := s.robinCli.CreateGbhNotebook(r.Context(), nb.Title); err == nil && createdRemote != nil && createdRemote.ID != "" {
 			nb.ID = createdRemote.ID
 			nb.IsRemote = true
+			s.notebooksCache.Invalidate()
 		}
 	}
 	nb.SourceCount = len(nb.Sources)
@@ -348,6 +354,7 @@ func (s *Server) handleUpsertNotebook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.notebooksCache.Invalidate()
 	writeJSON(w, http.StatusOK, saved)
 }
 
@@ -377,6 +384,7 @@ func (s *Server) handleDeleteNotebook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.notebooksCache.Invalidate()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -390,11 +398,11 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			remoteList, _ = s.robinCli.ListRemySchedules(r.Context())
+			remoteList, _ = s.schedulesCache.GetOrDo(r.Context(), 15*time.Second, s.robinCli.ListRemySchedules)
 		}()
 		go func() {
 			defer wg.Done()
-			recommended, _ = s.robinCli.ListRecommendedSchedules(r.Context())
+			recommended, _ = s.recommendedCache.GetOrDo(r.Context(), 60*time.Second, s.robinCli.ListRecommendedSchedules)
 		}()
 		wg.Wait()
 	}
@@ -463,6 +471,8 @@ func (s *Server) handleAddRecommendedSchedule(w http.ResponseWriter, r *http.Req
 	}
 	if s.robinCli != nil && strings.TrimSpace(req.ID) != "" {
 		if err := s.robinCli.AddRecommendedSchedule(r.Context(), req.ID); err == nil {
+			s.schedulesCache.Invalidate()
+			s.recommendedCache.Invalidate()
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "remote": true})
 			return
 		}
@@ -520,6 +530,7 @@ func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
+		s.schedulesCache.Invalidate()
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -530,6 +541,7 @@ func (s *Server) handleRunScheduleNow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		if s.robinCli != nil && id != "" {
 			if err := s.robinCli.ExecuteRemySchedule(r.Context(), id); err == nil {
+				s.schedulesCache.Invalidate()
 				writeJSON(w, http.StatusOK, map[string]any{
 					"ok":     true,
 					"remote": true,
@@ -581,7 +593,9 @@ func (s *Server) handleRunScheduleNow(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListLibrary(w http.ResponseWriter, r *http.Request) {
 	items := make([]LibraryEntry, 0)
 	if s.robinCli != nil {
-		if arts, err := s.robinCli.ListGeminiAppArtifacts(r.Context(), 24); err == nil {
+		if arts, err := s.libraryCache.GetOrDo(r.Context(), 20*time.Second, func(ctx context.Context) ([]proto.AppArtifact, error) {
+			return s.robinCli.ListGeminiAppArtifacts(ctx, 24)
+		}); err == nil {
 			for _, a := range arts {
 				items = append(items, LibraryEntry{
 					ID:             a.ID,
@@ -616,8 +630,8 @@ func (s *Server) handleProxyLibraryImage(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	img, err := s.imgSF.Do(rawURL, func() (cachedImage, error) {
-		data, ct, err := s.robinCli.FetchRemoteImageBytes(r.Context(), rawURL)
+	img, err := s.imgSF.Do(r.Context(), rawURL, func(ctx context.Context) (cachedImage, error) {
+		data, ct, err := s.robinCli.FetchRemoteImageBytes(ctx, rawURL)
 		if err != nil {
 			return cachedImage{}, err
 		}
@@ -674,13 +688,19 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	remoteOK := false
-	if s.robinCli != nil && req.ConversationID != "" {
-		if err := s.robinCli.WriteFeedback(r.Context(), req.ConversationID, req.RequestID, req.ResponseID, req.Positive, req.Comment); err == nil {
-			remoteOK = true
-		}
+	if strings.TrimSpace(req.ConversationID) == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("conversation_id가 필요합니다"))
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "remote": remoteOK})
+	if s.robinCli != nil {
+		if err := s.robinCli.WriteFeedback(r.Context(), req.ConversationID, req.RequestID, req.ResponseID, req.Positive, req.Comment); err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "remote": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "remote": false})
 }
 
 func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
@@ -742,8 +762,8 @@ func (s *Server) getCachedMediaArtifacts(ctx context.Context, forceRefresh bool)
 	}
 	s.mediaMu.Unlock()
 
-	media, err := s.mediaSF.Do("media_artifacts", func() ([]proto.AppArtifact, error) {
-		fetched, err := s.robinCli.ListGeminiMediaArtifacts(ctx, 80)
+	media, err := s.mediaSF.Do(ctx, "media_artifacts", func(runCtx context.Context) ([]proto.AppArtifact, error) {
+		fetched, err := s.robinCli.ListGeminiMediaArtifacts(runCtx, 80)
 		if err != nil {
 			return nil, err
 		}
@@ -839,9 +859,11 @@ func (s *Server) enrichGeneratedImages(ctx context.Context, convID string, turns
 		}
 	}
 	// 2차: ID가 일치하지 않은 남은 플레이스홀더 턴은 생성 시각 근접 매칭(±180초)
+	// 한 턴이 플레이스홀더 개수를 초과해 인접 턴의 이미지까지 흡수하지 않도록 상한을 둔다.
 	for i := range turns {
 		t := &turns[i]
-		if len(t.GeneratedImages) > 0 || !strings.Contains(t.ModelText, "googleusercontent.com/image_generation_content/") {
+		needed := strings.Count(t.ModelText, "googleusercontent.com/image_generation_content/")
+		if len(t.GeneratedImages) > 0 || needed == 0 {
 			continue
 		}
 		for mi, m := range convMedia {
@@ -858,6 +880,9 @@ func (s *Server) enrichGeneratedImages(ctx context.Context, convID string, turns
 					Title: m.Title,
 				})
 				used[mi] = true
+				if len(t.GeneratedImages) >= needed {
+					break
+				}
 			}
 		}
 	}
@@ -976,9 +1001,19 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		_ = writeSSE("error", map[string]string{"error": err.Error()})
 		return
 	}
-	// 새 응답이 완료되면 생성 이미지 캐시를 무효화해 직후 턴 조회에서 최신 이미지를 즉시 반영한다.
-	s.invalidateMediaCache()
+	// 새 응답이 미디어·아티팩트·도구·첨부를 포함할 때만 미디어/라이브러리 캐시를 선택적으로 무효화한다.
+	hasMediaOrArtifact := len(params.FilePaths) > 0 ||
+		len(params.Attachments) > 0 ||
+		len(final.Artifacts) > 0 ||
+		len(final.ToolActivities) > 0 ||
+		strings.Contains(final.Text, "googleusercontent.com/image_generation_content/") ||
+		strings.Contains(final.Text, "immersive_entry_chip/")
+	if hasMediaOrArtifact {
+		s.invalidateMediaCache()
+		s.libraryCache.Invalidate()
+	}
 	if !params.Temporary && len(params.FilePaths) > 0 {
+		entries := make([]LibraryEntry, 0, len(params.FilePaths))
 		for _, fp := range params.FilePaths {
 			ext := strings.ToLower(filepath.Ext(fp))
 			kind := "file"
@@ -988,7 +1023,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			case ".wav", ".mp3", ".m4a", ".ogg", ".flac":
 				kind = "audio"
 			}
-			s.store.AddLibraryEntry(LibraryEntry{
+			entries = append(entries, LibraryEntry{
 				Kind:           kind,
 				Title:          filepath.Base(fp),
 				Path:           fp,
@@ -996,6 +1031,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				ConversationID: final.ConversationID,
 			})
 		}
+		s.store.AddLibraryEntries(entries)
 	}
 	_ = writeSSE("done", final)
 }
@@ -1016,6 +1052,8 @@ func compactStreamChunk(chunk proto.ChatStreamChunk, prevText, prevThoughts *str
 			*prevText = chunk.Text
 			chunk.Delta = ""
 		}
+	} else if chunk.Delta != "" {
+		*prevText += chunk.Delta
 	}
 	if chunk.Thoughts != "" {
 		if strings.HasPrefix(chunk.Thoughts, *prevThoughts) {
@@ -1027,6 +1065,8 @@ func compactStreamChunk(chunk proto.ChatStreamChunk, prevText, prevThoughts *str
 			*prevThoughts = chunk.Thoughts
 			chunk.ThoughtsDelta = ""
 		}
+	} else if chunk.ThoughtsDelta != "" {
+		*prevThoughts += chunk.ThoughtsDelta
 	}
 	return chunk
 }

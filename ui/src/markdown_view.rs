@@ -1530,27 +1530,43 @@ impl<'p> GeminiMarkdownViewer<'p> {
             ..container::Style::default()
         });
 
-        let code_lines = column(lines.iter().map(|line| {
-            let spans = line.spans(settings.style);
-            let is_blank = spans.is_empty()
-                || spans.iter().all(|sp| sp.text.is_empty() || sp.text == "\n");
-            if is_blank {
+        // 대형 코드 블록에서 줄마다 위젯을 생성하는 오버헤드를 줄이기 위해 40줄 단위 청크로 병합한다.
+        const CODE_CHUNK_LINES: usize = 40;
+        let code_lines = if lines.is_empty() {
+            column![
                 text(" ")
                     .font(settings.style.code_block_font)
                     .size(settings.code_size)
                     .line_height(text::LineHeight::Relative(CODE_LINE_HEIGHT))
-                    .into()
-            } else {
-                rich_text(spans)
+            ]
+            .spacing(0)
+        } else {
+            column(lines.chunks(CODE_CHUNK_LINES).map(|chunk| {
+                let mut merged: Vec<text::Span<'a, markdown::Uri>> =
+                    Vec::with_capacity(chunk.len() * 3);
+                for (i, line) in chunk.iter().enumerate() {
+                    if i > 0 {
+                        merged.push(text::Span::new("\n"));
+                    }
+                    let spans = line.spans(settings.style);
+                    let is_blank = spans.is_empty()
+                        || spans.iter().all(|sp| sp.text.is_empty() || sp.text == "\n");
+                    if is_blank {
+                        merged.push(text::Span::new(" "));
+                    } else {
+                        merged.extend(spans.iter().cloned());
+                    }
+                }
+                rich_text(merged)
                     .on_link_click(Message::LinkClicked)
                     .font(settings.style.code_block_font)
                     .size(settings.code_size)
                     .line_height(text::LineHeight::Relative(CODE_LINE_HEIGHT))
                     .color(text_code)
                     .into()
-            }
-        }))
-        .spacing(0);
+            }))
+            .spacing(0)
+        };
 
         let body = scrollable(container(code_lines).padding([12, 16]))
             .width(Fill)
@@ -2701,5 +2717,22 @@ mod tests {
             ParsedMarkdown::parse("이미지: http://googleusercontent.com/image_generation_");
         let full2 = "이미지: http://googleusercontent.com/image_generation_content/0";
         assert!(img_parsed.push_delta(false, "content/0", full2, true));
+    }
+
+    #[test]
+    fn 대형_코드블록_파싱과_원문_복사_정합성() {
+        let mut src = String::from("```rust\n");
+        for i in 1..=120 {
+            src.push_str(&format!("let v_{i} = {i};\n"));
+        }
+        src.push_str("```\n");
+
+        let parsed = ParsedMarkdown::parse(&src);
+        let code = parsed
+            .code_block_text(0, 0)
+            .expect("대형 코드블록 원문 조회가 가능해야 합니다");
+        assert!(code.contains("let v_1 = 1;"));
+        assert!(code.contains("let v_120 = 120;"));
+        assert_eq!(code.lines().count(), 120);
     }
 }

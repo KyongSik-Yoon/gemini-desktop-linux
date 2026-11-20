@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -83,22 +84,42 @@ func RunUIControl(ctx context.Context, code string, captureScreenshot bool) (*Ex
 	return res, nil
 }
 
-// CollectUIState는 Hyprland 창 목록·포그라운드 창 정보와 AT-SPI 접근성 트리를 결합해 반환한다.
+// CollectUIState는 Hyprland 창 목록·포그라운드 창 정보를 병렬 조회해 반환한다.
 func CollectUIState(ctx context.Context) string {
-	var sb strings.Builder
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	if out, err := exec.CommandContext(cctx, "hyprctl", "activewindow", "-j").Output(); err == nil && len(out) > 0 {
+	var (
+		wg        sync.WaitGroup
+		activeOut []byte
+		clientOut []byte
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if out, err := exec.CommandContext(cctx, "hyprctl", "activewindow", "-j").Output(); err == nil {
+			activeOut = out
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if out, err := exec.CommandContext(cctx, "hyprctl", "clients", "-j").Output(); err == nil {
+			clientOut = out
+		}
+	}()
+	wg.Wait()
+
+	var sb strings.Builder
+	if len(activeOut) > 0 {
 		var win map[string]any
-		if json.Unmarshal(out, &win) == nil {
+		if json.Unmarshal(activeOut, &win) == nil {
 			sb.WriteString(fmt.Sprintf("ActiveWindow: class=%v title=%q at=%v size=%v workspace=%v\n",
 				win["class"], win["title"], win["at"], win["size"], win["workspace"]))
 		}
 	}
-	if out, err := exec.CommandContext(cctx, "hyprctl", "clients", "-j").Output(); err == nil && len(out) > 0 {
+	if len(clientOut) > 0 {
 		var clients []map[string]any
-		if json.Unmarshal(out, &clients) == nil {
+		if json.Unmarshal(clientOut, &clients) == nil {
 			sb.WriteString("Windows:\n")
 			for i, c := range clients {
 				if i >= 25 {
@@ -172,8 +193,21 @@ def double_click(x=None, y=None):
 def right_click(x=None, y=None):
     click(x, y, "right")
 
-def drag_to(x, y):
-    move_to(x, y)
+def drag_to(x, y, button="left"):
+    btn_map = {"left": "1", "middle": "2", "right": "3"}
+    b = btn_map.get(str(button).lower(), "1")
+    if shutil.which("ydotool"):
+        down_map = {"1": "0x40", "2": "0x42", "3": "0x41"}
+        up_map = {"1": "0x80", "2": "0x82", "3": "0x81"}
+        _run(["ydotool", "click", down_map.get(b, "0x40")])
+        time.sleep(0.05)
+        move_to(x, y)
+        time.sleep(0.05)
+        _run(["ydotool", "click", up_map.get(b, "0x80")])
+    elif shutil.which("xdotool"):
+        _run(["xdotool", "mousedown", b, "mousemove", "--sync", str(int(x)), str(int(y)), "mouseup", b])
+    else:
+        move_to(x, y)
 
 def type_text(text):
     if shutil.which("wtype"):

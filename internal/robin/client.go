@@ -54,7 +54,7 @@ type ttlFlight[T any] struct {
 	err  error
 }
 
-func (tc *ttlCallCache[T]) GetOrDo(ttl time.Duration, fn func() (T, error)) (T, error) {
+func (tc *ttlCallCache[T]) GetOrDo(ctx context.Context, ttl time.Duration, fn func(context.Context) (T, error)) (T, error) {
 	tc.mu.Lock()
 	if tc.hasVal && time.Since(tc.cachedAt) < ttl {
 		v := tc.val
@@ -63,28 +63,43 @@ func (tc *ttlCallCache[T]) GetOrDo(ttl time.Duration, fn func() (T, error)) (T, 
 	}
 	if fl := tc.inFlight; fl != nil {
 		tc.mu.Unlock()
-		<-fl.done
-		return fl.val, fl.err
+		select {
+		case <-fl.done:
+			return fl.val, fl.err
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		}
 	}
 	fl := &ttlFlight[T]{done: make(chan struct{})}
 	tc.inFlight = fl
 	tc.mu.Unlock()
 
-	val, err := fn()
+	go func() {
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		val, err := fn(runCtx)
 
-	tc.mu.Lock()
-	if err == nil {
-		tc.val = val
-		tc.hasVal = true
-		tc.cachedAt = time.Now()
+		tc.mu.Lock()
+		if err == nil {
+			tc.val = val
+			tc.hasVal = true
+			tc.cachedAt = time.Now()
+		}
+		fl.val = val
+		fl.err = err
+		tc.inFlight = nil
+		tc.mu.Unlock()
+		close(fl.done)
+	}()
+
+	select {
+	case <-fl.done:
+		return fl.val, fl.err
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
 	}
-	fl.val = val
-	fl.err = err
-	tc.inFlight = nil
-	tc.mu.Unlock()
-	close(fl.done)
-
-	return val, err
 }
 
 func (tc *ttlCallCache[T]) Invalidate() {
@@ -411,7 +426,7 @@ func (c *Client) UnregisterDevice(ctx context.Context) error {
 
 // ListDevices는 현재 계정에 등록된 원격 데스크톱 기기 목록을 조회한다(15초 TTL 캐시 및 동시 호출 병합).
 func (c *Client) ListDevices(ctx context.Context) ([]proto.RegisteredDeviceSummary, error) {
-	devs, err := c.devicesCache.GetOrDo(15*time.Second, func() ([]proto.RegisteredDeviceSummary, error) {
+	devs, err := c.devicesCache.GetOrDo(ctx, 15*time.Second, func(ctx context.Context) ([]proto.RegisteredDeviceSummary, error) {
 		reqBytes := proto.EncodeListDevicesRequest(c.buildMetadata())
 		respBytes, err := c.invokeUnary(ctx, PathListDevices, reqBytes)
 		if err != nil {

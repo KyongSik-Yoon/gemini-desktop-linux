@@ -31,19 +31,33 @@ type BundledServer struct {
 
 // Registry는 내장(git, obsidian) 및 외부 stdio MCP 서버를 관리하고 호출을 중계한다.
 type Registry struct {
-	mu      sync.RWMutex
-	cfg     *config.Config
-	servers map[string]*BundledServer
-	reqSeq  atomic.Int64
+	mu            sync.RWMutex
+	cfg           *config.Config
+	servers       map[string]*BundledServer
+	reqSeq        atomic.Int64
+	stdioMu       sync.Mutex
+	stdioSessions map[string]*mcpStdioSession
 }
 
 func NewRegistry(cfg *config.Config) *Registry {
 	r := &Registry{
-		cfg:     cfg,
-		servers: make(map[string]*BundledServer),
+		cfg:           cfg,
+		servers:       make(map[string]*BundledServer),
+		stdioSessions: make(map[string]*mcpStdioSession),
 	}
 	r.reload()
 	return r
+}
+
+// Close는 열린 외부 stdio MCP 세션을 모두 종료한다.
+func (r *Registry) Close() {
+	r.stdioMu.Lock()
+	sessions := r.stdioSessions
+	r.stdioSessions = make(map[string]*mcpStdioSession)
+	r.stdioMu.Unlock()
+	for _, sess := range sessions {
+		sess.close()
+	}
 }
 
 func (r *Registry) reload() {
@@ -398,6 +412,190 @@ func (r *Registry) execObsidianTool(_ context.Context, toolName string, args map
 	}
 }
 
+const mcpStdioIdleTimeout = 2 * time.Minute
+
+// mcpStdioSession은 외부 stdio MCP 서버 프로세스를 유지·재사용해 매 호출마다 프로세스를 재기동하는 비용을 없앤다.
+type mcpStdioSession struct {
+	mu        sync.Mutex
+	serverID  string
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	reader    *bufio.Reader
+	closed    bool
+	idleTimer *time.Timer
+	onIdle    func(*mcpStdioSession)
+}
+
+func (s *mcpStdioSession) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeLocked()
+}
+
+func (s *mcpStdioSession) closeLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.idleTimer != nil {
+		s.idleTimer.Stop()
+		s.idleTimer = nil
+	}
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
+	}
+}
+
+func (s *mcpStdioSession) resetIdleTimerLocked() {
+	if s.idleTimer != nil {
+		s.idleTimer.Stop()
+	}
+	s.idleTimer = time.AfterFunc(mcpStdioIdleTimeout, func() {
+		if s.onIdle != nil {
+			s.onIdle(s)
+		}
+		s.close()
+	})
+}
+
+func (s *mcpStdioSession) sendLocked(id int64, method string, params map[string]any) error {
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	}
+	if id > 0 {
+		payload["id"] = id
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	_, err = s.stdin.Write(b)
+	return err
+}
+
+func (s *mcpStdioSession) readResponseLocked(ctx context.Context, targetID int64) (map[string]any, map[string]any, error) {
+	type readRes struct {
+		result map[string]any
+		rpcErr map[string]any
+		err    error
+	}
+	ch := make(chan readRes, 1)
+	go func() {
+		for {
+			line, err := s.reader.ReadBytes('\n')
+			if err != nil {
+				ch <- readRes{err: err}
+				return
+			}
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			var msg struct {
+				ID     int64          `json:"id"`
+				Result map[string]any `json:"result"`
+				Error  map[string]any `json:"error"`
+			}
+			if json.Unmarshal(line, &msg) == nil && msg.ID == targetID {
+				ch <- readRes{result: msg.Result, rpcErr: msg.Error}
+				return
+			}
+		}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.result, res.rpcErr, res.err
+	case <-ctx.Done():
+		// 블로킹된 ReadBytes 고루틴을 해제하기 위해 프로세스를 즉시 종료한다.
+		s.closeLocked()
+		<-ch
+		return nil, nil, ctx.Err()
+	}
+}
+
+func jsonSchemaToProto(m map[string]any) *proto.SchemaDef {
+	if len(m) == 0 {
+		return &proto.SchemaDef{Type: proto.TypeObject}
+	}
+	sd := &proto.SchemaDef{}
+	typeStr, _ := m["type"].(string)
+	if typeStr == "" {
+		// JSON Schema 2020-12 스타일의 type: ["string", "null"] 배열도 지원한다.
+		if arr, ok := m["type"].([]any); ok {
+			for _, v := range arr {
+				s, _ := v.(string)
+				if s == "null" {
+					sd.Nullable = true
+				} else if typeStr == "" && s != "" {
+					typeStr = s
+				}
+			}
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(typeStr)) {
+	case "string":
+		sd.Type = proto.TypeString
+	case "integer":
+		sd.Type = proto.TypeInteger
+	case "number":
+		sd.Type = proto.TypeNumber
+	case "boolean":
+		sd.Type = proto.TypeBoolean
+	case "array":
+		sd.Type = proto.TypeArray
+	case "object":
+		sd.Type = proto.TypeObject
+	default:
+		if _, hasProps := m["properties"]; hasProps {
+			sd.Type = proto.TypeObject
+		} else {
+			sd.Type = proto.TypeUnspecified
+		}
+	}
+	if desc, ok := m["description"].(string); ok {
+		sd.Description = desc
+	}
+	if nullable, ok := m["nullable"].(bool); ok && nullable {
+		sd.Nullable = true
+	}
+	if enumAny, ok := m["enum"].([]any); ok {
+		for _, v := range enumAny {
+			if s, ok := v.(string); ok {
+				sd.Enum = append(sd.Enum, s)
+			} else if v != nil {
+				sd.Enum = append(sd.Enum, fmt.Sprint(v))
+			}
+		}
+	}
+	if itemsMap, ok := m["items"].(map[string]any); ok {
+		sd.Items = jsonSchemaToProto(itemsMap)
+	}
+	if propsMap, ok := m["properties"].(map[string]any); ok && len(propsMap) > 0 {
+		sd.Properties = make(map[string]*proto.SchemaDef, len(propsMap))
+		for k, v := range propsMap {
+			if vm, ok := v.(map[string]any); ok {
+				sd.Properties[k] = jsonSchemaToProto(vm)
+			}
+		}
+	}
+	if reqAny, ok := m["required"].([]any); ok {
+		for _, v := range reqAny {
+			if s, ok := v.(string); ok && s != "" {
+				sd.Required = append(sd.Required, s)
+			}
+		}
+	}
+	return sd
+}
+
 func (r *Registry) probeExternalMCPTools(sc config.MCPServerConfig) []proto.FunctionDecl {
 	if sc.Command == "" {
 		return nil
@@ -418,10 +616,16 @@ func (r *Registry) probeExternalMCPTools(sc config.MCPServerConfig) []proto.Func
 		name, _ := tm["name"].(string)
 		desc, _ := tm["description"].(string)
 		if name != "" {
+			var params *proto.SchemaDef
+			if schemaMap, ok := tm["inputSchema"].(map[string]any); ok {
+				params = jsonSchemaToProto(schemaMap)
+			} else {
+				params = &proto.SchemaDef{Type: proto.TypeObject}
+			}
 			out = append(out, proto.FunctionDecl{
 				Name:        name,
 				Description: desc,
-				Parameters:  &proto.SchemaDef{Type: proto.TypeObject},
+				Parameters:  params,
 			})
 		}
 	}
@@ -435,8 +639,31 @@ func (r *Registry) callExternalMCP(ctx context.Context, sc config.MCPServerConfi
 	})
 }
 
-func (r *Registry) runStdioRPC(ctx context.Context, sc config.MCPServerConfig, method string, params map[string]any) (map[string]any, error) {
-	cmd := exec.CommandContext(ctx, sc.Command, sc.Args...)
+func (r *Registry) evictStdioSession(serverID string, target *mcpStdioSession) {
+	r.stdioMu.Lock()
+	if cur, ok := r.stdioSessions[serverID]; ok && (target == nil || cur == target) {
+		delete(r.stdioSessions, serverID)
+	}
+	r.stdioMu.Unlock()
+}
+
+func (r *Registry) getOrCreateStdioSession(ctx context.Context, sc config.MCPServerConfig) (*mcpStdioSession, error) {
+	serverKey := sc.ServerID
+	if serverKey == "" {
+		serverKey = sc.Command
+	}
+
+	r.stdioMu.Lock()
+	if r.stdioSessions == nil {
+		r.stdioSessions = make(map[string]*mcpStdioSession)
+	}
+	if existing, ok := r.stdioSessions[serverKey]; ok {
+		r.stdioMu.Unlock()
+		return existing, nil
+	}
+	r.stdioMu.Unlock()
+
+	cmd := exec.Command(sc.Command, sc.Args...)
 	cmd.Env = os.Environ()
 	for k, v := range sc.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -447,69 +674,116 @@ func (r *Registry) runStdioRPC(ctx context.Context, sc config.MCPServerConfig, m
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
-	defer func() {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}()
 
-	reader := bufio.NewReader(stdout)
-	send := func(id int64, m string, p map[string]any) error {
-		payload := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  m,
-			"params":  p,
-		}
-		if id > 0 {
-			payload["id"] = id
-		}
-		b, _ := json.Marshal(payload)
-		b = append(b, '\n')
-		_, err := stdin.Write(b)
-		return err
+	sess := &mcpStdioSession{
+		serverID: serverKey,
+		cmd:      cmd,
+		stdin:    stdin,
+		reader:   bufio.NewReader(stdout),
+		onIdle: func(s *mcpStdioSession) {
+			r.evictStdioSession(serverKey, s)
+		},
 	}
 
-	if err := send(1, "initialize", map[string]any{
+	// MCP initialize 핸드셰이크 및 JSON-RPC 에러 검증
+	sess.mu.Lock()
+	if err := sess.sendLocked(1, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "gemini-remote-linux", "version": "1.0.0"},
 	}); err != nil {
+		sess.closeLocked()
+		sess.mu.Unlock()
 		return nil, err
 	}
-	_, _ = reader.ReadBytes('\n')
-	_ = send(0, "notifications/initialized", map[string]any{})
-
-	reqID := r.reqSeq.Add(1) + 10
-	if err := send(reqID, method, params); err != nil {
+	_, initErr, err := sess.readResponseLocked(ctx, 1)
+	if err != nil {
+		sess.closeLocked()
+		sess.mu.Unlock()
+		return nil, fmt.Errorf("MCP initialize 실패: %w", err)
+	}
+	if initErr != nil {
+		sess.closeLocked()
+		sess.mu.Unlock()
+		return nil, fmt.Errorf("MCP initialize 오류: %v", initErr)
+	}
+	if err := sess.sendLocked(0, "notifications/initialized", map[string]any{}); err != nil {
+		sess.closeLocked()
+		sess.mu.Unlock()
 		return nil, err
 	}
+	sess.resetIdleTimerLocked()
+	sess.mu.Unlock()
 
-	for {
-		line, err := reader.ReadBytes('\n')
+	r.stdioMu.Lock()
+	if existing, ok := r.stdioSessions[serverKey]; ok {
+		r.stdioMu.Unlock()
+		sess.close()
+		return existing, nil
+	}
+	r.stdioSessions[serverKey] = sess
+	r.stdioMu.Unlock()
+	return sess, nil
+}
+
+func (r *Registry) runStdioRPC(ctx context.Context, sc config.MCPServerConfig, method string, params map[string]any) (map[string]any, error) {
+	serverKey := sc.ServerID
+	if serverKey == "" {
+		serverKey = sc.Command
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		sess, err := r.getOrCreateStdioSession(ctx, sc)
 		if err != nil {
 			return nil, err
 		}
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
+
+		sess.mu.Lock()
+		if sess.closed {
+			sess.mu.Unlock()
+			r.evictStdioSession(serverKey, sess)
+			lastErr = io.EOF
 			continue
 		}
-		var msg struct {
-			ID     int64          `json:"id"`
-			Result map[string]any `json:"result"`
-			Error  map[string]any `json:"error"`
+		if sess.idleTimer != nil {
+			sess.idleTimer.Stop()
 		}
-		if json.Unmarshal(line, &msg) == nil && msg.ID == reqID {
-			if msg.Error != nil {
-				return map[string]any{"error": msg.Error}, nil
+		reqID := r.reqSeq.Add(1) + 10
+		if err := sess.sendLocked(reqID, method, params); err != nil {
+			sess.closeLocked()
+			sess.mu.Unlock()
+			r.evictStdioSession(serverKey, sess)
+			lastErr = err
+			continue
+		}
+		res, rpcErr, err := sess.readResponseLocked(ctx, reqID)
+		if err != nil {
+			sess.closeLocked()
+			sess.mu.Unlock()
+			r.evictStdioSession(serverKey, sess)
+			if ctx.Err() != nil {
+				return nil, err
 			}
-			return msg.Result, nil
+			lastErr = err
+			continue
 		}
+		sess.resetIdleTimerLocked()
+		sess.mu.Unlock()
+
+		if rpcErr != nil {
+			return map[string]any{"error": rpcErr}, nil
+		}
+		return res, nil
 	}
+	return nil, lastErr
 }
 
 func gitToolDeclarations() []proto.FunctionDecl {

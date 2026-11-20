@@ -2,11 +2,13 @@ package localapi
 
 import (
 	"container/list"
+	"context"
 	"sync"
 	"time"
 )
 
 // singleflightGroup은 동일 키에 대한 동시 다발적 원격 호출을 1회로 병합한다.
+// 첫 요청의 컨텍스트 취소가 다른 대기자에게 전염되지 않도록 공용 실행은 분리된 타임아웃 컨텍스트에서 돌린다.
 type singleflightGroup[T any] struct {
 	mu    sync.Mutex
 	calls map[string]*sfCall[T]
@@ -18,29 +20,82 @@ type sfCall[T any] struct {
 	err  error
 }
 
-func (g *singleflightGroup[T]) Do(key string, fn func() (T, error)) (T, error) {
+func (g *singleflightGroup[T]) Do(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, error) {
 	g.mu.Lock()
 	if g.calls == nil {
 		g.calls = make(map[string]*sfCall[T])
 	}
 	if c, ok := g.calls[key]; ok {
 		g.mu.Unlock()
-		<-c.done
-		return c.val, c.err
+		select {
+		case <-c.done:
+			return c.val, c.err
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		}
 	}
 	c := &sfCall[T]{done: make(chan struct{})}
 	g.calls[key] = c
 	g.mu.Unlock()
 
-	defer func() {
-		g.mu.Lock()
-		delete(g.calls, key)
-		g.mu.Unlock()
-		close(c.done)
+	go func() {
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		defer func() {
+			g.mu.Lock()
+			delete(g.calls, key)
+			g.mu.Unlock()
+			close(c.done)
+		}()
+		c.val, c.err = fn(runCtx)
 	}()
 
-	c.val, c.err = fn()
-	return c.val, c.err
+	select {
+	case <-c.done:
+		return c.val, c.err
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	}
+}
+
+// ttlCache는 단일 원격 조회 결과에 짧은 TTL과 singleflight 병합(취소 비전염)을 제공한다.
+type ttlCache[T any] struct {
+	mu       sync.Mutex
+	val      T
+	hasVal   bool
+	cachedAt time.Time
+	sf       singleflightGroup[T]
+}
+
+func (tc *ttlCache[T]) GetOrDo(ctx context.Context, ttl time.Duration, fn func(context.Context) (T, error)) (T, error) {
+	tc.mu.Lock()
+	if tc.hasVal && time.Since(tc.cachedAt) < ttl {
+		v := tc.val
+		tc.mu.Unlock()
+		return v, nil
+	}
+	tc.mu.Unlock()
+
+	return tc.sf.Do(ctx, "singleton", func(runCtx context.Context) (T, error) {
+		v, err := fn(runCtx)
+		if err == nil {
+			tc.mu.Lock()
+			tc.val = v
+			tc.hasVal = true
+			tc.cachedAt = time.Now()
+			tc.mu.Unlock()
+		}
+		return v, err
+	})
+}
+
+func (tc *ttlCache[T]) Invalidate() {
+	tc.mu.Lock()
+	tc.hasVal = false
+	tc.cachedAt = time.Time{}
+	tc.mu.Unlock()
 }
 
 type cachedImage struct {

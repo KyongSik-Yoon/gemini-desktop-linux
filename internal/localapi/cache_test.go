@@ -1,6 +1,7 @@
 package localapi
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -53,7 +54,7 @@ func TestSingleflightGroupDeduplicatesConcurrentCalls(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			val, err := sf.Do("same-key", func() (string, error) {
+			val, err := sf.Do(context.Background(), "same-key", func(context.Context) (string, error) {
 				calls.Add(1)
 				time.Sleep(30 * time.Millisecond)
 				return "shared-result", nil

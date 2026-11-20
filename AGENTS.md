@@ -5,7 +5,7 @@
 ## 1. Go 백엔드 (`internal/localapi`, `internal/robin`, `internal/punctual`, `internal/scotty`)
 
 1. **커넥션 풀·업로더 재사용**: 핸들러나 메서드마다 `&http.Client{}` 또는 `scotty.NewUploader()`를 새로 만들지 않는다. 반드시 `robin.Client`의 공용 풀(`getHTTPClient`, `getImageClient`, `getUploader`)을 사용한다.
-2. **TTL 캐시 + singleflight 병합**: 부팅·새로고침·대화 전환 시 반복 호출되는 메타/프로필/기기/아바타/원격 이미지 조회는 `ttlCallCache[T]` 또는 `singleflightGroup[T]`(`internal/localapi/cache.go`, `internal/robin/client.go`)로 중복 RPC·원격 요청을 병합한다.
+2. **TTL 캐시 + singleflight 병합(취소 비전염)**: 부팅·새로고침·대화 전환 시 반복 호출되는 메타/프로필/기기/노트북/예약/라이브러리/아바타/원격 이미지 조회는 `ttlCallCache[T]`·`ttlCache[T]` 또는 `singleflightGroup[T]`(`internal/localapi/cache.go`, `internal/robin/client.go`)로 중복 RPC·원격 요청을 병합하되, 첫 호출자의 `ctx` 취소가 공용 실행과 다른 대기자에게 전염되지 않도록 분리된 실행 컨텍스트를 사용한다.
 3. **SSE 증분 전송 (`O(N)`)**: `handleChatStream`의 스트리밍 청크는 순수 접두사 증가 구간에서 누적 본문 전체를 반복 전송하지 않고 `compactStreamChunk`로 델타만 전송한다(`done` 이벤트에서만 전체 최종본 전달).
 4. **비블로킹 대화 전환**: `ListTurns` 등 인터랙티브 경로에서 무거운 미디어 인덱싱·원격 조회로 일반 대화를 동기 블로킹하지 않는다. stale-while-revalidate + 비동기 워밍업(`warmMediaCacheAsync`)을 유지한다.
 5. **독립 I/O 병렬화**: 다중 파일 업로드 등 독립적인 네트워크 I/O는 제한된 동시성(예: 최대 4 워커)으로 병렬 실행하고 원본 순서를 보존한다.
@@ -29,6 +29,7 @@
 ## 3. 보안 및 위생
 
 - 기기 UUID, 호스트명, OAuth 토큰 등 민감 정보는 로그·문서·커밋 메시지에 노출하지 않는다.
+- 와이어 hex 덤프(`hex=%x`) 등 원시 프로토콜 디버그 출력은 반드시 `GEMINI_DEBUG_WIRE=1` 환경변수 가드 뒤에만 둔다.
 - 외부 URL 실행은 `http://`/`https://` 허용 목록 검증(`open_safe_external_url`)을 거친다.
 
 ## 4. 검증 및 배포 명령

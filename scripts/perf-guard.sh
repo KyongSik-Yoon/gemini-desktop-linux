@@ -57,12 +57,17 @@ if [[ -f ui/src/markdown_view.rs ]]; then
   fi
 fi
 
-# [GO-01] internal/robin·internal/localapi에서 client.go 외 임시 &http.Client{} 생성 금지
-if hits="$(rg -n '&http\.Client\{' internal/robin/ internal/localapi/ --glob '!client.go' --glob '!*_test.go' 2>/dev/null || true)" && [[ -n "$hits" ]]; then
-  report_violation "GO-01" "핸들러/메서드 내 임시 &http.Client{} 생성 금지 — robin.Client 공용 풀(getHTTPClient/getImageClient)을 재사용하세요." "$hits"
+# [UI-06] view() 경로 내 self.palette.clone() 프레임 할당 금지
+if hits="$(rg -n 'self\.palette\.clone\(\)' ui/src/ 2>/dev/null || true)" && [[ -n "$hits" ]]; then
+  report_violation "UI-06" "self.palette.clone() 금지 — 필요한 Color 필드만 복사하거나 AppTheme::subtle_scrollable_style_with_fg를 사용하세요." "$hits"
 fi
 
-# [GO-02] internal/robin에서 client.go 외 scotty.NewUploader() 직접 생성 금지
+# [GO-01] internal/ 전역에서 공용 클라이언트 생성자 외 임시 &http.Client{} 생성 금지
+if hits="$(rg -n '&http\.Client\{' internal/ --glob '!client.go' --glob '!watcher.go' --glob '!executor.go' --glob '!upload.go' --glob '!oauth.go' --glob '!*_test.go' 2>/dev/null || true)" && [[ -n "$hits" ]]; then
+  report_violation "GO-01" "핸들러/메서드 내 임시 &http.Client{} 생성 금지 — 공용 http.Client 풀을 재사용하세요." "$hits"
+fi
+
+# [GO-02] internal/robin·internal/localapi에서 client.go 외 scotty.NewUploader() 직접 생성 금지
 if hits="$(rg -n 'scotty\.NewUploader\(' internal/robin/ internal/localapi/ --glob '!client.go' --glob '!*_test.go' 2>/dev/null || true)" && [[ -n "$hits" ]]; then
   report_violation "GO-02" "임시 scotty.NewUploader() 생성 금지 — robin.Client.getUploader()를 재사용하세요." "$hits"
 fi
@@ -74,12 +79,20 @@ if [[ -f internal/localapi/server.go ]]; then
   fi
 fi
 
+# [GO-04] 와이어 hex 덤프 로그(hex=%x)는 GEMINI_DEBUG_WIRE 환경변수 가드 필수
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  if ! rg -q 'GEMINI_DEBUG_WIRE|debugWire' "$f"; then
+    report_violation "GO-04" "${f}에 GEMINI_DEBUG_WIRE 가드 없는 hex=%x 와이어 로그가 있습니다."
+  fi
+done < <(rg -l 'hex=%x' internal/ --glob '!*_test.go' 2>/dev/null || true)
+
 if [[ "$violations" -gt 0 ]]; then
   echo "성능 가드 위반 ${violations}건이 감지되었습니다." >&2
   exit 1
 fi
 
-echo "[OK] 정적 성능 회귀 가드 8개 항목 통과"
+echo "[OK] 정적 성능 회귀 가드 10개 항목 통과"
 
 if [[ "$RUN_FULL" -eq 1 ]]; then
   echo "[1/4] go vet ./..."
