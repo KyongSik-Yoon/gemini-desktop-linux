@@ -89,7 +89,7 @@ pub fn pick<'a>(locale: Locale, ko: &'a str, en: &'a str) -> &'a str {
 
 /// 한국어 기준 UI 문자열을 현재 로케일에 맞게 번역한다.
 /// `Locale::Ko`일 때는 추가 할당 없이 원문을 그대로 반환한다.
-pub fn t(locale: Locale, ko: &'static str) -> &'static str {
+pub fn t(locale: Locale, ko: &str) -> &str {
     if !locale.is_en() {
         return ko;
     }

@@ -190,6 +190,39 @@ impl App {
                                     ..container::Style::default()
                                 }),
                             );
+                        } else if self.failed_image_keys.contains(&it.id) {
+                            card_body = card_body.push(
+                                container(
+                                    row![
+                                        Icon::Image.view(18.0, text_muted),
+                                        text(t(loc, "이미지 썸네일 로드 실패"))
+                                            .size(12)
+                                            .color(text_muted),
+                                        space::horizontal(),
+                                        button(text(t(loc, "다시 시도")).size(11.5).color(accent))
+                                            .on_press(Message::RetryImageLoad(
+                                                it.id.clone(),
+                                                it.url.clone(),
+                                            ))
+                                            .padding([4, 9])
+                                            .style(move |_, status| {
+                                                ghost_btn_style(status, bg_hover, accent, 8.0)
+                                            }),
+                                    ]
+                                    .spacing(8)
+                                    .align_y(Alignment::Center),
+                                )
+                                .padding(12)
+                                .width(Fill)
+                                .style(move |_| container::Style {
+                                    background: Some(Background::Color(bg_thought)),
+                                    border: Border {
+                                        radius: 10.0.into(),
+                                        ..Border::default()
+                                    },
+                                    ..container::Style::default()
+                                }),
+                            );
                         } else {
                             card_body = card_body.push(
                                 container(
@@ -563,6 +596,36 @@ impl App {
                             .height(Length::Fixed(130.0))
                             .content_fit(ContentFit::Cover)
                             .into()
+                    } else if self.failed_image_keys.contains(&it.id) {
+                        container(
+                            column![
+                                text(t(loc, "이미지 로드 실패")).size(12).color(text_muted),
+                                button(text(t(loc, "다시 시도")).size(11.5).color(accent))
+                                    .on_press(Message::RetryImageLoad(
+                                        it.id.clone(),
+                                        it.url.clone(),
+                                    ))
+                                    .padding([4, 10])
+                                    .style(move |_, status| {
+                                        ghost_btn_style(status, bg_hover, accent, 8.0)
+                                    }),
+                            ]
+                            .spacing(6)
+                            .align_x(Alignment::Center),
+                        )
+                        .width(Fill)
+                        .height(Length::Fixed(130.0))
+                        .align_x(Alignment::Center)
+                        .align_y(Alignment::Center)
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(bg_thought)),
+                            border: Border {
+                                radius: 10.0.into(),
+                                ..Border::default()
+                            },
+                            ..container::Style::default()
+                        })
+                        .into()
                     } else {
                         container(text(t(loc, "이미지 미리보기")).size(12).color(text_muted))
                             .width(Fill)
@@ -1838,7 +1901,7 @@ impl App {
             .spacing(6)
             .align_y(Alignment::Center),
         )
-        .on_press(Message::SwitchSection(ActiveSection::Chat))
+        .on_press(Message::StartBotChat(bot.id.clone()))
         .padding([9, 15])
         .style(move |_, status| {
             let h = matches!(status, button::Status::Hovered);

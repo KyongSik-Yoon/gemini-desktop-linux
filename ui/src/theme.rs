@@ -487,22 +487,7 @@ impl AppTheme {
     }
 
     /// 투명 트랙과 얇고 둥근 호버 스크롤러를 사용하는 미니멀 스크롤바 스타일.
-    pub fn subtle_scrollable_style(
-        &self,
-        status: scrollable::Status,
-    ) -> scrollable::Style {
-        Self::subtle_scrollable_style_with_fg(self.text_primary, status)
-    }
-
-    /// 어두운 코드 배경(`bg_code`) 위에서도 선명하게 보이는 미니멀 스크롤바 스타일.
-    pub fn subtle_code_scrollable_style(
-        &self,
-        status: scrollable::Status,
-    ) -> scrollable::Style {
-        Self::subtle_scrollable_style_with_fg(self.text_code, status)
-    }
-
-    fn subtle_scrollable_style_with_fg(
+    pub fn subtle_scrollable_style_with_fg(
         fg: Color,
         status: scrollable::Status,
     ) -> scrollable::Style {

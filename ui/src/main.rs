@@ -238,6 +238,7 @@ struct CanvasPreviewState {
 
 pub(crate) struct App {
     pub(crate) palette: AppTheme,
+    cached_iced_theme: Theme,
     pub(crate) theme_mode: ThemeMode,
     pub(crate) language_pref: LanguagePref,
     pub(crate) locale: Locale,
@@ -304,6 +305,7 @@ pub(crate) struct App {
     pub(crate) library_image_cache: HashMap<String, image::Handle>,
     library_image_order: VecDeque<String>,
     failed_image_keys: HashSet<String>,
+    inflight_image_keys: HashSet<String>,
 
     // 이미지 · 동영상 스튜디오 상태
     pub(crate) image_prompt_draft: String,
@@ -316,6 +318,7 @@ pub(crate) struct App {
     // 대화 상태
     pub(crate) conversations: Vec<ConversationSummary>,
     active_conv_id: Option<String>,
+    active_project_id: Option<String>,
     active_title: String,
     active_model: String,
     parent_request_id: String,
@@ -329,15 +332,18 @@ pub(crate) struct App {
 
     // 입력창 · 모드 · 첨부 · 화면 공유 · 마이크 녹음
     composer: text_editor::Content,
+    composer_has_text: bool,
     pub(crate) composer_mode: ComposerMode,
     attached_files: Vec<PathBuf>,
     file_hovering: bool,
     temporary_chat: bool,
     screen_capturing: bool,
     voice_recorder: Option<VoiceRecorder>,
+    voice_stopping: bool,
     recording_seconds: u32,
 
     loading_history: bool,
+    conv_load_seq: u64,
     is_streaming: bool,
     streaming_req_id: String,
     stream_abort_handle: Option<task::Handle>,
@@ -436,7 +442,7 @@ pub(crate) enum Message {
 
     // 대화 선택 · 관리 · 공유 · 읽지않음 · 피드백
     SelectConversation(String, String),
-    TurnsLoaded(String, Result<ListTurnsResponse, String>),
+    TurnsLoaded(u64, String, Result<ListTurnsResponse, String>),
     NewChat,
     StartRename(String, String),
     RenameDraftChanged(String),
@@ -447,6 +453,7 @@ pub(crate) enum Message {
     ConversationPinned(Result<(String, bool), String>),
     ToggleUnreadConversation(String, bool),
     ConversationUnreadUpdated(Result<(String, bool), String>),
+    ConversationUnreadSynced(String, Result<(String, bool), String>),
     ShareConversation(String, String),
     ConversationShared(Result<ShareResponse, String>),
     AddConvToNotebook(String, String),
@@ -454,7 +461,7 @@ pub(crate) enum Message {
     DeleteConversation(String),
     ConversationDeleted(Result<String, String>),
     SendFeedback(usize, bool),
-    FeedbackSent(Result<(), String>),
+    FeedbackSent(usize, Option<bool>, Result<(), String>),
 
     // 노트북
     NewNotebook,
@@ -501,6 +508,7 @@ pub(crate) enum Message {
     SetVideoDuration(String),
     GenerateVideoPrompt,
     StartBotPrompt(String, String),
+    StartBotChat(String),
     StartFeaturePrompt(i32, String),
 
     // 입력창 · 화면 공유 · 마이크 · 스트리밍
@@ -512,12 +520,14 @@ pub(crate) enum Message {
     ToggleCanvasRaw,
     CloseCanvasPreview,
     RunCanvasHtml(usize, usize),
+    CanvasHtmlOpened(Result<PathBuf, String>),
     RetryImageLoad(String, String),
     OpenFilePicker,
     FilesPicked(Result<Vec<PathBuf>, String>),
     StartScreenCapture,
     ScreenCaptured(Result<PathBuf, String>),
     ToggleVoiceRecording,
+    VoiceRecordStopped(Result<PathBuf, String>),
     EditorAction(text_editor::Action),
     RemoveAttachment(usize),
     SendPrompt,
@@ -539,10 +549,12 @@ pub(crate) enum Message {
 impl App {
     fn new() -> (Self, Task<Message>) {
         let palette = AppTheme::load_with_mode(ThemeMode::System, false);
+        let cached_iced_theme = palette.to_iced_theme();
         let language_pref = LanguagePref::System;
         let locale = language_pref.resolve();
         let app = Self {
             palette,
+            cached_iced_theme,
             theme_mode: ThemeMode::System,
             language_pref,
             locale,
@@ -601,14 +613,16 @@ impl App {
             library_image_cache: HashMap::new(),
             library_image_order: VecDeque::new(),
             failed_image_keys: HashSet::new(),
+            inflight_image_keys: HashSet::new(),
             image_prompt_draft: String::new(),
             image_aspect: "1:1".into(),
-            image_style: "실사".into(),
+            image_style: "도시락".into(),
             video_prompt_draft: String::new(),
             video_aspect: "16:9".into(),
             video_duration: "5초".into(),
             conversations: Vec::new(),
             active_conv_id: None,
+            active_project_id: None,
             active_title: String::new(),
             active_model: String::new(),
             parent_request_id: String::new(),
@@ -618,14 +632,17 @@ impl App {
             renaming_conv_id: None,
             rename_draft: String::new(),
             composer: text_editor::Content::new(),
+            composer_has_text: false,
             composer_mode: ComposerMode::Chat,
             attached_files: Vec::new(),
             file_hovering: false,
             temporary_chat: false,
             screen_capturing: false,
             voice_recorder: None,
+            voice_stopping: false,
             recording_seconds: 0,
             loading_history: false,
+            conv_load_seq: 0,
             is_streaming: false,
             streaming_req_id: String::new(),
             stream_abort_handle: None,
@@ -666,7 +683,34 @@ impl App {
     }
 
     fn theme(&self) -> Theme {
-        self.palette.to_iced_theme()
+        self.cached_iced_theme.clone()
+    }
+
+    fn set_palette(&mut self, next: AppTheme) {
+        self.cached_iced_theme = next.to_iced_theme();
+        self.palette = next;
+        self.clear_canvas_caches();
+    }
+
+    fn reset_chat_state(&mut self, clear_bot: bool) {
+        self.cancel_active_stream();
+        self.active_section = ActiveSection::Chat;
+        if clear_bot {
+            self.active_bot_id = None;
+        }
+        self.active_conv_id = None;
+        self.active_project_id = None;
+        self.active_title.clear();
+        self.active_model.clear();
+        self.parent_request_id.clear();
+        self.parent_response_id.clear();
+        self.messages.clear();
+        self.message_feedback.clear();
+        self.renaming_conv_id = None;
+        self.canvas_preview = None;
+        self.loading_history = false;
+        self.error_banner = None;
+        self.conv_load_seq = self.conv_load_seq.wrapping_add(1);
     }
 
     fn clear_canvas_caches(&mut self) {
@@ -674,16 +718,18 @@ impl App {
         self.avatar_mask_cache.clear();
     }
 
-    fn preload_library_images(&self) -> Task<Message> {
+    fn preload_library_images(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
-        for item in self.library_items.iter() {
+        for item in &self.library_items {
             if item.kind == "image"
                 && !item.url.is_empty()
                 && !self.library_image_cache.contains_key(&item.id)
                 && !self.failed_image_keys.contains(&item.id)
+                && !self.inflight_image_keys.contains(&item.id)
             {
                 let id = item.id.clone();
                 let url = item.url.clone();
+                self.inflight_image_keys.insert(id.clone());
                 tasks.push(Task::perform(ipc::fetch_library_image(url), move |r| {
                     Message::LibraryImageLoaded(id, r)
                 }));
@@ -852,18 +898,18 @@ impl App {
             }
             Message::OmarchyThemeChanged(generation) => {
                 if self.theme_mode == ThemeMode::System && generation != self.palette.generation {
-                    self.palette =
+                    let next =
                         AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
-                    self.clear_canvas_caches();
+                    self.set_palette(next);
                 }
                 Task::none()
             }
             Message::SystemThemeChanged(mode) => {
                 self.system_dark_fallback = matches!(mode, iced::theme::Mode::Dark);
                 if self.theme_mode == ThemeMode::System {
-                    self.palette =
+                    let next =
                         AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
-                    self.clear_canvas_caches();
+                    self.set_palette(next);
                 }
                 Task::none()
             }
@@ -1031,7 +1077,20 @@ impl App {
                     self.ensure_selected_device();
                     Task::none()
                 }
-                RemoteEvent::Tool(_tool_ev) => Task::none(),
+                RemoteEvent::Tool(tool_ev) => {
+                    match tool_ev.phase.as_str() {
+                        "started" | "start" => {
+                            self.remote_status.current_tool = tool_ev.tool_name.clone();
+                        }
+                        "finished" | "done" | "error" | "session_ended" => {
+                            self.remote_status.current_tool.clear();
+                        }
+                        _ => {}
+                    }
+                    self.remote_status.recent_events.insert(0, tool_ev);
+                    self.remote_status.recent_events.truncate(20);
+                    Task::none()
+                }
             },
             Message::ToggleDeviceMenu => {
                 self.device_menu_open = !self.device_menu_open;
@@ -1167,6 +1226,7 @@ impl App {
             }
             Message::LibraryLoaded(Err(_)) => Task::none(),
             Message::LibraryImageLoaded(id, Ok(bytes)) => {
+                self.inflight_image_keys.remove(&id);
                 if bytes.is_empty() {
                     self.failed_image_keys.insert(id);
                 } else {
@@ -1176,12 +1236,13 @@ impl App {
                 Task::none()
             }
             Message::LibraryImageLoaded(id, Err(_)) => {
+                self.inflight_image_keys.remove(&id);
                 self.failed_image_keys.insert(id);
                 Task::none()
             }
             Message::RetryImageLoad(key, url) => {
                 self.failed_image_keys.remove(&key);
-                if url.trim().is_empty() {
+                if url.trim().is_empty() || !self.inflight_image_keys.insert(key.clone()) {
                     return Task::none();
                 }
                 Task::perform(ipc::fetch_library_image(url), move |r| {
@@ -1198,9 +1259,9 @@ impl App {
                 let next_mode = ThemeMode::from_str(&prefs.theme_mode);
                 if next_mode != self.theme_mode {
                     self.theme_mode = next_mode;
-                    self.palette =
+                    let next =
                         AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
-                    self.clear_canvas_caches();
+                    self.set_palette(next);
                 }
                 let next_lang = LanguagePref::from_str(&prefs.language);
                 self.language_pref = next_lang;
@@ -1271,14 +1332,6 @@ impl App {
                         Task::perform(ipc::list_notebooks(), Message::NotebooksLoaded)
                     }
                     ActiveSection::GemsHub => Task::perform(ipc::list_bots(), Message::BotsLoaded),
-                    ActiveSection::Student => {
-                        self.active_bot_id = Some("learning-coach".into());
-                        Task::none()
-                    }
-                    ActiveSection::Gem(bot_id) => {
-                        self.active_bot_id = Some(bot_id);
-                        Task::none()
-                    }
                     _ => Task::none(),
                 }
             }
@@ -1390,8 +1443,8 @@ impl App {
             }
             Message::SetThemeMode(mode) => {
                 self.theme_mode = mode;
-                self.palette = AppTheme::load_with_mode(mode, self.system_dark_fallback);
-                self.clear_canvas_caches();
+                let next = AppTheme::load_with_mode(mode, self.system_dark_fallback);
+                self.set_palette(next);
                 let lbl = mode.label_for(self.locale);
                 self.show_toast(if self.locale.is_en() {
                     format!("Theme: {lbl}")
@@ -1536,6 +1589,7 @@ impl App {
                     format!("{current}@{name} ")
                 };
                 self.composer = text_editor::Content::with_text(&replaced);
+                self.composer_has_text = !replaced.trim().is_empty();
                 self.mention_query = None;
                 Task::none()
             }
@@ -1556,41 +1610,26 @@ impl App {
                 Task::none()
             }
             Message::NewChat => {
-                self.cancel_active_stream();
                 self.model_menu_open = false;
-                self.active_section = ActiveSection::Chat;
-                self.active_bot_id = None;
-                self.active_conv_id = None;
-                self.active_title.clear();
-                self.active_model.clear();
-                self.parent_request_id.clear();
-                self.parent_response_id.clear();
-                self.messages.clear();
-                self.renaming_conv_id = None;
-                self.error_banner = None;
+                self.reset_chat_state(true);
                 Task::none()
             }
             Message::SelectConversation(conv_id, title) => {
-                self.cancel_active_stream();
                 self.model_menu_open = false;
                 self.search_modal_open = false;
-                self.active_section = ActiveSection::Chat;
                 self.temporary_chat = false;
-                self.active_bot_id = None;
+                self.reset_chat_state(true);
                 self.active_conv_id = Some(conv_id.clone());
                 self.active_title = title;
-                self.active_model.clear();
-                self.parent_request_id.clear();
-                self.parent_response_id.clear();
-                self.messages.clear();
-                self.renaming_conv_id = None;
-                self.canvas_preview = None;
                 self.loading_history = true;
-                self.error_banner = None;
 
                 let mut is_agent = false;
+                let mut was_unread = false;
                 for c in &mut self.conversations {
                     if c.conversation_id == conv_id {
+                        if c.has_unread {
+                            was_unread = true;
+                        }
                         c.has_unread = false;
                         is_agent = c.is_agent_chat;
                     }
@@ -1601,13 +1640,29 @@ impl App {
                     ComposerMode::Chat
                 };
 
+                let seq = self.conv_load_seq;
                 let id_for_cb = conv_id.clone();
-                Task::perform(ipc::list_turns(conv_id, 50), move |res| {
-                    Message::TurnsLoaded(id_for_cb, res)
-                })
+                let load_task = Task::perform(ipc::list_turns(conv_id.clone(), 50), move |res| {
+                    Message::TurnsLoaded(seq, id_for_cb, res)
+                });
+                if was_unread {
+                    let sync_cid = conv_id.clone();
+                    Task::batch([
+                        load_task,
+                        Task::perform(
+                            ipc::mark_conversation_unread(conv_id, false),
+                            move |res| Message::ConversationUnreadSynced(sync_cid, res),
+                        ),
+                    ])
+                } else {
+                    load_task
+                }
             }
-            Message::TurnsLoaded(conv_id, Ok(res)) => {
-                if self.active_conv_id.as_deref() != Some(conv_id.as_str()) {
+            Message::TurnsLoaded(seq, conv_id, Ok(res)) => {
+                if seq != self.conv_load_seq
+                    || self.is_streaming
+                    || self.active_conv_id.as_deref() != Some(conv_id.as_str())
+                {
                     return Task::none();
                 }
                 self.loading_history = false;
@@ -1621,8 +1676,6 @@ impl App {
                 self.message_feedback.clear();
                 let mut tasks: Vec<Task<Message>> = vec![Self::scroll_to_bottom()];
                 let mut preload_count = 0usize;
-                let mut queued_keys: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
 
                 for t in &turns {
                     if !t.user_text.is_empty() || !t.user_attachments.is_empty() {
@@ -1642,7 +1695,8 @@ impl App {
                             {
                                 let key = markdown_view::turn_attachment_cache_key(&att.url);
                                 if !self.library_image_cache.contains_key(&key)
-                                    && queued_keys.insert(key.clone())
+                                    && !self.failed_image_keys.contains(&key)
+                                    && self.inflight_image_keys.insert(key.clone())
                                 {
                                     let url = att.url.clone();
                                     tasks.push(Task::perform(
@@ -1682,7 +1736,8 @@ impl App {
                             if preload_count < 24 && !img.url.is_empty() {
                                 let key = markdown_view::generated_image_cache_key(&img.url);
                                 if !self.library_image_cache.contains_key(&key)
-                                    && queued_keys.insert(key.clone())
+                                    && !self.failed_image_keys.contains(&key)
+                                    && self.inflight_image_keys.insert(key.clone())
                                 {
                                     let url = img.url.clone();
                                     tasks.push(Task::perform(
@@ -1703,8 +1758,10 @@ impl App {
                 }
                 Task::batch(tasks)
             }
-            Message::TurnsLoaded(conv_id, Err(e)) => {
-                if self.active_conv_id.as_deref() == Some(conv_id.as_str()) {
+            Message::TurnsLoaded(seq, conv_id, Err(e)) => {
+                if seq == self.conv_load_seq
+                    && self.active_conv_id.as_deref() == Some(conv_id.as_str())
+                {
                     self.loading_history = false;
                     self.error_banner = Some(if self.locale.is_en() {
                         format!("Failed to load conversation history: {e}")
@@ -1831,6 +1888,29 @@ impl App {
                 });
                 Task::none()
             }
+            Message::ConversationUnreadSynced(cid, res) => {
+                match res {
+                    Ok((updated_id, unread)) => {
+                        if let Some(c) = self
+                            .conversations
+                            .iter_mut()
+                            .find(|c| c.conversation_id == updated_id)
+                        {
+                            c.has_unread = unread;
+                        }
+                    }
+                    Err(_) => {
+                        if let Some(c) = self
+                            .conversations
+                            .iter_mut()
+                            .find(|c| c.conversation_id == cid)
+                        {
+                            c.has_unread = true;
+                        }
+                    }
+                }
+                Task::none()
+            }
             Message::ShareConversation(conv_id, title) => {
                 self.conv_menu_target = None;
                 Task::perform(
@@ -1900,7 +1980,7 @@ impl App {
                 Task::none()
             }
             Message::SendFeedback(idx, positive) => {
-                self.message_feedback.insert(idx, positive);
+                let prev = self.message_feedback.insert(idx, positive);
                 let conv_id = self.active_conv_id.clone().unwrap_or_default();
                 let (req_id, resp_id) = self
                     .messages
@@ -1917,11 +1997,26 @@ impl App {
                 ));
                 Task::perform(
                     ipc::send_feedback(conv_id, req_id, resp_id, positive),
-                    Message::FeedbackSent,
+                    move |res| Message::FeedbackSent(idx, prev, res),
                 )
             }
-            Message::FeedbackSent(Ok(())) => Task::none(),
-            Message::FeedbackSent(Err(_)) => Task::none(),
+            Message::FeedbackSent(_, _, Ok(())) => Task::none(),
+            Message::FeedbackSent(idx, prev, Err(e)) => {
+                match prev {
+                    Some(v) => {
+                        self.message_feedback.insert(idx, v);
+                    }
+                    None => {
+                        self.message_feedback.remove(&idx);
+                    }
+                }
+                self.error_banner = Some(if self.locale.is_en() {
+                    format!("Failed to send feedback: {e}")
+                } else {
+                    format!("피드백 전송 실패: {e}")
+                });
+                Task::none()
+            }
 
             // --- 노트북 ---
             Message::NewNotebook => {
@@ -1950,8 +2045,11 @@ impl App {
                 Task::none()
             }
             Message::NotebookNotesAction(action) => {
+                let is_edit = action.is_edit();
                 self.notebook_notes_editor.perform(action);
-                self.editing_notebook.notes = self.notebook_notes_editor.text();
+                if is_edit {
+                    self.editing_notebook.notes = self.notebook_notes_editor.text();
+                }
                 Task::none()
             }
             Message::AddNotebookSource => {
@@ -2030,9 +2128,10 @@ impl App {
                         files.push(p);
                     }
                 }
-                self.active_section = ActiveSection::Chat;
-                self.active_conv_id = None;
-                self.messages.clear();
+                self.reset_chat_state(true);
+                if nb.is_remote && !nb.id.is_empty() {
+                    self.active_project_id = Some(nb.id.clone());
+                }
                 self.attached_files = files;
                 let prompt = if notes.is_empty() {
                     if self.locale.is_en() {
@@ -2058,6 +2157,7 @@ impl App {
                     )
                 };
                 self.composer = text_editor::Content::with_text(&prompt);
+                self.composer_has_text = !prompt.trim().is_empty();
                 self.show_toast(if self.locale.is_en() {
                     format!("Connected sources from notebook '{}' to chat", nb.title)
                 } else {
@@ -2265,19 +2365,18 @@ impl App {
                     return Task::none();
                 }
                 self.image_prompt_draft.clear();
+                self.reset_chat_state(true);
                 self.selected_feature_mode = FEATURE_MODE_IMAGE;
-                self.active_section = ActiveSection::Chat;
-                self.active_conv_id = None;
-                self.messages.clear();
+                let style_label = t(self.locale, &self.image_style);
                 let full_prompt = if self.locale.is_en() {
                     format!(
                         "Generate a high-quality image based on the following description.\n- Style: {}\n- Aspect ratio: {}\n- Description: {}",
-                        self.image_style, self.image_aspect, raw
+                        style_label, self.image_aspect, raw
                     )
                 } else {
                     format!(
                         "다음 설명으로 고품질 이미지를 생성해 주세요.\n- 스타일: {}\n- 화면 비율: {}\n- 설명: {}",
-                        self.image_style, self.image_aspect, raw
+                        style_label, self.image_aspect, raw
                     )
                 };
                 self.dispatch_prompt(full_prompt, Vec::new())
@@ -2301,35 +2400,35 @@ impl App {
                     return Task::none();
                 }
                 self.video_prompt_draft.clear();
+                self.reset_chat_state(true);
                 self.selected_feature_mode = FEATURE_MODE_VIDEO;
-                self.active_section = ActiveSection::Chat;
-                self.active_conv_id = None;
-                self.messages.clear();
+                let dur_label = t(self.locale, &self.video_duration);
                 let full_prompt = if self.locale.is_en() {
                     format!(
                         "Generate a video for the following scene.\n- Aspect ratio: {}\n- Duration: {}\n- Scene: {}",
-                        self.video_aspect, self.video_duration, raw
+                        self.video_aspect, dur_label, raw
                     )
                 } else {
                     format!(
                         "다음 장면으로 동영상을 생성해 주세요.\n- 화면 비율: {}\n- 길이: {}\n- 장면 설명: {}",
-                        self.video_aspect, self.video_duration, raw
+                        self.video_aspect, dur_label, raw
                     )
                 };
                 self.dispatch_prompt(full_prompt, Vec::new())
             }
             Message::StartBotPrompt(bot_id, prompt) => {
+                self.reset_chat_state(false);
                 self.active_bot_id = Some(bot_id);
-                self.active_section = ActiveSection::Chat;
-                self.active_conv_id = None;
-                self.messages.clear();
                 self.dispatch_prompt(prompt, Vec::new())
             }
+            Message::StartBotChat(bot_id) => {
+                self.reset_chat_state(false);
+                self.active_bot_id = Some(bot_id);
+                Task::none()
+            }
             Message::StartFeaturePrompt(fmode, prompt) => {
+                self.reset_chat_state(true);
                 self.selected_feature_mode = fmode;
-                self.active_section = ActiveSection::Chat;
-                self.active_conv_id = None;
-                self.messages.clear();
                 self.dispatch_prompt(prompt, Vec::new())
             }
 
@@ -2345,13 +2444,7 @@ impl App {
                 let next = !self.temporary_chat;
                 self.model_menu_open = false;
                 if next && self.active_conv_id.is_some() {
-                    self.cancel_active_stream();
-                    self.active_conv_id = None;
-                    self.active_title.clear();
-                    self.active_model.clear();
-                    self.parent_request_id.clear();
-                    self.parent_response_id.clear();
-                    self.messages.clear();
+                    self.reset_chat_state(true);
                 }
                 self.active_section = ActiveSection::Chat;
                 self.temporary_chat = next;
@@ -2406,23 +2499,35 @@ impl App {
                     .get(msg_idx)
                     .and_then(|m| m.artifacts.get(art_idx))
                 {
-                    match write_and_open_canvas_html(&art.title, &art.content) {
-                        Ok(_) => {
-                            self.show_toast(if self.locale.is_en() {
-                                "Opened Canvas HTML in browser"
-                            } else {
-                                "브라우저에서 Canvas HTML을 열었습니다"
-                            });
-                        }
-                        Err(e) => {
-                            self.error_banner = Some(if self.locale.is_en() {
-                                format!("Failed to launch Canvas HTML: {e}")
-                            } else {
-                                format!("Canvas HTML 실행 실패: {e}")
-                            });
-                        }
-                    }
+                    let title = art.title.clone();
+                    let content = art.content.clone();
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                write_and_open_canvas_html(&title, &content)
+                            })
+                            .await
+                            .map_err(|e| format!("백그라운드 작업 오류: {e}"))?
+                        },
+                        Message::CanvasHtmlOpened,
+                    );
                 }
+                Task::none()
+            }
+            Message::CanvasHtmlOpened(Ok(_)) => {
+                self.show_toast(if self.locale.is_en() {
+                    "Opened Canvas HTML in browser"
+                } else {
+                    "브라우저에서 Canvas HTML을 열었습니다"
+                });
+                Task::none()
+            }
+            Message::CanvasHtmlOpened(Err(e)) => {
+                self.error_banner = Some(if self.locale.is_en() {
+                    format!("Failed to launch Canvas HTML: {e}")
+                } else {
+                    format!("Canvas HTML 실행 실패: {e}")
+                });
                 Task::none()
             }
             Message::OpenFilePicker => {
@@ -2490,15 +2595,20 @@ impl App {
                 Task::none()
             }
             Message::ToggleVoiceRecording => {
+                if self.voice_stopping {
+                    return Task::none();
+                }
                 if let Some(recorder) = self.voice_recorder.take() {
                     self.recording_seconds = 0;
-                    match recorder.stop() {
-                        Ok(wav_path) => {
-                            self.attached_files.push(wav_path);
-                            self.show_toast(t(self.locale, "음성 녹음이 첨부되었습니다 (전송 시 분석)"));
-                        }
-                        Err(e) => self.show_toast(e),
-                    }
+                    self.voice_stopping = true;
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || recorder.stop())
+                                .await
+                                .map_err(|e| format!("음성 녹음 종료 작업 오류: {e}"))?
+                        },
+                        Message::VoiceRecordStopped,
+                    );
                 } else {
                     match VoiceRecorder::start() {
                         Ok(rec) => {
@@ -2513,9 +2623,25 @@ impl App {
                 }
                 Task::none()
             }
+            Message::VoiceRecordStopped(Ok(wav_path)) => {
+                self.voice_stopping = false;
+                self.attached_files.push(wav_path);
+                self.show_toast(t(self.locale, "음성 녹음이 첨부되었습니다 (전송 시 분석)"));
+                Task::none()
+            }
+            Message::VoiceRecordStopped(Err(e)) => {
+                self.voice_stopping = false;
+                self.show_toast(e);
+                Task::none()
+            }
             Message::EditorAction(action) => {
+                let is_edit = action.is_edit();
                 self.composer.perform(action);
-                self.mention_query = extract_mention_query(&self.composer.text());
+                if is_edit {
+                    let current = self.composer.text();
+                    self.composer_has_text = !current.trim().is_empty();
+                    self.mention_query = extract_mention_query(&current);
+                }
                 Task::none()
             }
             Message::RemoveAttachment(idx) => {
@@ -2533,6 +2659,7 @@ impl App {
                     return Task::none();
                 }
                 self.composer = text_editor::Content::new();
+                self.composer_has_text = false;
                 let files = std::mem::take(&mut self.attached_files);
                 self.active_section = ActiveSection::Chat;
                 self.dispatch_prompt(prompt, files)
@@ -2541,13 +2668,28 @@ impl App {
                 if self.is_streaming {
                     return Task::none();
                 }
-                let last_user_text = self
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == Role::User)
-                    .map(|m| m.raw_text.clone());
-                if let Some(prompt) = last_user_text {
+                if self.messages.last().is_some_and(|m| m.role == Role::Model) {
+                    let removed_idx = self.messages.len() - 1;
+                    self.messages.pop();
+                    self.message_feedback.remove(&removed_idx);
+                }
+                let prompt = if self.messages.last().is_some_and(|m| m.role == Role::User) {
+                    self.messages.pop().map(|m| m.raw_text)
+                } else {
+                    self.messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == Role::User)
+                        .map(|m| m.raw_text.clone())
+                };
+                if let Some(prev_model) = self.messages.iter().rev().find(|m| m.role == Role::Model) {
+                    self.parent_request_id = prev_model.request_id.clone();
+                    self.parent_response_id = prev_model.response_id.clone();
+                } else {
+                    self.parent_request_id.clear();
+                    self.parent_response_id.clear();
+                }
+                if let Some(prompt) = prompt {
                     return self.dispatch_prompt(prompt, Vec::new());
                 }
                 Task::none()
@@ -2616,10 +2758,12 @@ impl App {
                         if needs_turn_refresh
                             && let Some(conv_id) = self.active_conv_id.clone()
                         {
+                            self.conv_load_seq = self.conv_load_seq.wrapping_add(1);
+                            let seq = self.conv_load_seq;
                             let id_cb = conv_id.clone();
                             tasks.push(Task::perform(
                                 ipc::list_turns(conv_id, 50),
-                                move |res| Message::TurnsLoaded(id_cb, res),
+                                move |res| Message::TurnsLoaded(seq, id_cb, res),
                             ));
                         }
                         Task::batch(tasks)
@@ -2848,7 +2992,7 @@ impl App {
             },
             temporary: self.temporary_chat,
             bot_id: self.active_bot_id.clone().unwrap_or_default(),
-            project_id: String::new(),
+            project_id: self.active_project_id.clone().unwrap_or_default(),
             mode_category,
             mode_variant_id,
             skip_thinking: false,
@@ -3321,14 +3465,13 @@ impl App {
             .spacing(2)
             .width(Fill);
 
-        let pal_scroll = self.palette.clone();
         let body_scroll = scrollable(scroll_content)
             .height(Fill)
             .width(Fill)
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::default().width(4).scroller_width(4),
             ))
-            .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
+            .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(text_primary, status));
 
         // 5. 하단 프로필 바 (원형 아바타 + 사용자 이름 + 플랜/상태 + 설정 톱니바퀴)
         let avatar_el: Element<'_, Message> = if let Some(handle) = &self.avatar_handle {
@@ -4120,7 +4263,7 @@ impl App {
 
         items.push(space::vertical().height(Length::Fixed(16.0)).into());
 
-        let pal_scroll = self.palette.clone();
+        let scroll_fg = self.palette.text_primary;
         let chat_scroll = scrollable(
             container(
                 column(items)
@@ -4143,7 +4286,7 @@ impl App {
         .direction(scrollable::Direction::Vertical(
             scrollable::Scrollbar::default().width(5).scroller_width(5),
         ))
-        .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
+        .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(scroll_fg, status));
 
         let composer_dock = container(
             column![
@@ -4197,7 +4340,6 @@ impl App {
         let min_h = if is_welcome { 52.0 } else { 42.0 };
         let editor_height = (line_count * 24.0 + 12.0).clamp(min_h, 160.0);
 
-        let selected_dev = self.selected_target_device();
         let placeholder: String = if self.composer_mode == ComposerMode::Task {
             t(loc, "태스크를 설명하세요").to_string()
         } else {
@@ -4373,8 +4515,7 @@ impl App {
             }
         });
 
-        let can_send =
-            !self.composer.text().trim().is_empty() || !self.attached_files.is_empty();
+        let can_send = self.composer_has_text || !self.attached_files.is_empty();
         let is_recording = self.voice_recorder.is_some();
 
         let action_btn: Element<'_, Message> = if self.is_streaming {
@@ -4538,6 +4679,7 @@ impl App {
         }
 
         if self.composer_mode == ComposerMode::Task {
+            let selected_dev = self.selected_target_device();
             let (dev_label, dev_online) = if let Some(dev) = &selected_dev {
                 let is_local = !self.remote_status.device_id.is_empty()
                     && dev
@@ -4642,7 +4784,7 @@ impl App {
         &'a self,
         content: iced::widget::Column<'a, Message>,
     ) -> Element<'a, Message> {
-        let pal_scroll = self.palette.clone();
+        let scroll_fg = self.palette.text_primary;
         scrollable(
             container(
                 content
@@ -4663,7 +4805,7 @@ impl App {
         .direction(scrollable::Direction::Vertical(
             scrollable::Scrollbar::default().width(5).scroller_width(5),
         ))
-        .style(move |_, status| pal_scroll.subtle_scrollable_style(status))
+        .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(scroll_fg, status))
         .into()
     }
 
@@ -4848,14 +4990,13 @@ impl App {
             );
         }
 
-        let pal_scroll = self.palette.clone();
         let scroll = scrollable(results)
             .height(Length::Fixed(380.0))
             .width(Fill)
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::default().width(4).scroller_width(4),
             ))
-            .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
+            .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(text_primary, status));
 
         let card = container(column![top_bar, scroll].spacing(10))
             .width(Length::Fixed(560.0))
@@ -5055,7 +5196,6 @@ impl App {
                 .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 15.0)),
         );
 
-        let pal_scroll = self.palette.clone();
         let body: Element<'a, Message> = if let (false, Some(parsed)) =
             (preview.show_raw, preview.parsed_markdown.as_ref())
         {
@@ -5073,6 +5213,7 @@ impl App {
                     failed_images: &self.failed_image_keys,
                 },
             );
+            let scroll_fg = self.palette.text_primary;
             container(
                 scrollable(container(rendered).padding([18, 22]).width(Fill))
                     .width(Fill)
@@ -5080,7 +5221,7 @@ impl App {
                     .direction(scrollable::Direction::Vertical(
                         scrollable::Scrollbar::default().width(6).scroller_width(6),
                     ))
-                    .style(move |_, status| pal_scroll.subtle_scrollable_style(status)),
+                    .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(scroll_fg, status)),
             )
             .width(Fill)
             .height(Fill)
@@ -5113,7 +5254,7 @@ impl App {
                     vertical: scrollable::Scrollbar::default().width(6).scroller_width(6),
                     horizontal: scrollable::Scrollbar::default().width(6).scroller_width(6),
                 })
-                .style(move |_, status| pal_scroll.subtle_code_scrollable_style(status)),
+                .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(text_code, status)),
             )
             .width(Fill)
             .height(Fill)
@@ -6123,7 +6264,6 @@ impl App {
             ..container::Style::default()
         });
 
-        let pal_scroll = self.palette.clone();
         let modal_scroll = scrollable(
             column![profile_card, usage_card, prefs_card, dev_col, shortcuts]
                 .spacing(14)
@@ -6139,7 +6279,7 @@ impl App {
         .direction(scrollable::Direction::Vertical(
             scrollable::Scrollbar::default().width(4).scroller_width(4),
         ))
-        .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
+        .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(text_primary, status));
 
         let card = container(column![header, modal_scroll].spacing(14))
             .width(Length::Fixed(580.0))
@@ -7205,12 +7345,17 @@ fn is_attachment_image(att: &TurnAttachment) -> bool {
 
 /// Canvas 아티팩트가 브라우저에서 바로 실행 가능한 HTML 문서인지 판별한다.
 fn is_html_artifact(art: &TurnArtifact) -> bool {
-    let lang = art.language.trim().to_ascii_lowercase();
-    if lang == "html" || lang == "htm" {
+    let lang = art.language.trim();
+    if lang.eq_ignore_ascii_case("html") || lang.eq_ignore_ascii_case("htm") {
         return true;
     }
-    let head = art.content.trim_start().to_ascii_lowercase();
-    head.starts_with("<!doctype html") || head.starts_with("<html")
+    let trimmed = art.content.trim_start().as_bytes();
+    trimmed
+        .get(..14)
+        .is_some_and(|h| h.eq_ignore_ascii_case(b"<!doctype html"))
+        || trimmed
+            .get(..5)
+            .is_some_and(|h| h.eq_ignore_ascii_case(b"<html"))
 }
 
 /// UI 요소 벡터를 지정한 최대 개수의 행 묶음으로 분할한다.
@@ -7236,7 +7381,16 @@ fn write_and_open_canvas_html(title: &str, content: &str) -> Result<PathBuf, Str
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join("gemini-ui-canvas");
+    let base_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("XDG_CACHE_HOME")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base_dir.join("gemini-ui-canvas");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
@@ -7294,7 +7448,7 @@ fn detect_local_tz_offset_secs() -> i64 {
 }
 
 fn parse_tz_offset_hhmm(s: &str) -> Option<i64> {
-    if s.len() != 5 {
+    if !s.is_ascii() || s.len() != 5 {
         return None;
     }
     let sign = match s.as_bytes()[0] {
@@ -7451,6 +7605,8 @@ mod url_safety_tests {
         assert_eq!(parse_tz_offset_hhmm("+0900"), Some(32_400));
         assert_eq!(parse_tz_offset_hhmm("-0530"), Some(-19_800));
         assert_eq!(parse_tz_offset_hhmm("invalid"), None);
+        // 5바이트 비ASCII 입력에서 UTF-8 슬라이싱 패닉이 발생하지 않아야 한다.
+        assert_eq!(parse_tz_offset_hhmm("+가0"), None);
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(20_555), (2026, 4, 12));
 

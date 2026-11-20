@@ -700,13 +700,24 @@ fn url_encode_query(s: &str) -> String {
     out
 }
 
+const MAX_HTTP_BODY_BYTES: usize = 64 * 1024 * 1024;
+const IPC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const IPC_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+async fn connect_unix_with_timeout(path: &std::path::Path) -> Result<UnixStream, String> {
+    tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(path))
+        .await
+        .map_err(|_| format!("데몬 소켓 연결 시간 초과 ({})", path.display()))?
+        .map_err(|e| format!("데몬 소켓 연결 실패 ({}): {e}", path.display()))
+}
+
 async fn send_http_request(
     method: &str,
     path: &str,
     body: Option<&[u8]>,
 ) -> Result<(u16, bool, Option<usize>, BufReader<UnixStream>), String> {
     let sock = socket_path();
-    let mut stream = match UnixStream::connect(&sock).await {
+    let mut stream = match connect_unix_with_timeout(&sock).await {
         Ok(s) => {
             cache_socket_path(&sock);
             s
@@ -715,13 +726,11 @@ async fn send_http_request(
             invalidate_socket_path();
             let fresh = resolve_socket_path();
             if fresh != sock {
-                let s = UnixStream::connect(&fresh)
-                    .await
-                    .map_err(|e| format!("데몬 소켓 연결 실패 ({}): {e}", fresh.display()))?;
+                let s = connect_unix_with_timeout(&fresh).await?;
                 cache_socket_path(&fresh);
                 s
             } else {
-                return Err(format!("데몬 소켓 연결 실패 ({}): {first_err}", sock.display()));
+                return Err(first_err);
             }
         }
     };
@@ -814,6 +823,9 @@ async fn read_body_bytes(
                 let _ = reader.read_line(&mut trail).await;
                 break;
             }
+            if sz > MAX_HTTP_BODY_BYTES || out.len().saturating_add(sz) > MAX_HTTP_BODY_BYTES {
+                return Err(format!("응답 본문이 최대 허용 크기({MAX_HTTP_BODY_BYTES}B)를 초과했습니다"));
+            }
             let mut buf = vec![0u8; sz];
             reader
                 .read_exact(&mut buf)
@@ -821,10 +833,16 @@ async fn read_body_bytes(
                 .map_err(|e| format!("chunk 본문 읽기 실패: {e}"))?;
             out.extend_from_slice(&buf);
             let mut crlf = [0u8; 2];
-            let _ = reader.read_exact(&mut crlf).await;
+            reader
+                .read_exact(&mut crlf)
+                .await
+                .map_err(|e| format!("chunk 종결 CRLF 읽기 실패: {e}"))?;
         }
         Ok(out)
     } else if let Some(len) = content_len {
+        if len > MAX_HTTP_BODY_BYTES {
+            return Err(format!("응답 본문이 최대 허용 크기({MAX_HTTP_BODY_BYTES}B)를 초과했습니다"));
+        }
         let mut buf = vec![0u8; len];
         reader
             .read_exact(&mut buf)
@@ -833,22 +851,31 @@ async fn read_body_bytes(
         Ok(buf)
     } else {
         let mut out = Vec::new();
-        reader
+        let mut limited = reader.take((MAX_HTTP_BODY_BYTES + 1) as u64);
+        limited
             .read_to_end(&mut out)
             .await
             .map_err(|e| format!("응답 본문 EOF 읽기 실패: {e}"))?;
+        if out.len() > MAX_HTTP_BODY_BYTES {
+            return Err(format!("응답 본문이 최대 허용 크기({MAX_HTTP_BODY_BYTES}B)를 초과했습니다"));
+        }
         Ok(out)
     }
 }
 
 async fn request_bytes(method: &str, path: &str, body: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let (status, chunked, content_len, mut reader) = send_http_request(method, path, body).await?;
-    let bytes = read_body_bytes(chunked, content_len, &mut reader).await?;
-    if status >= 400 {
-        let text = String::from_utf8_lossy(&bytes);
-        return Err(format!("HTTP {status}: {text}"));
-    }
-    Ok(bytes)
+    tokio::time::timeout(IPC_REQUEST_TIMEOUT, async {
+        let (status, chunked, content_len, mut reader) =
+            send_http_request(method, path, body).await?;
+        let bytes = read_body_bytes(chunked, content_len, &mut reader).await?;
+        if status >= 400 {
+            let text = String::from_utf8_lossy(&bytes);
+            return Err(format!("HTTP {status}: {text}"));
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| format!("IPC 요청 시간 초과 ({method} {path})"))?
 }
 
 async fn request_json<T: for<'de> Deserialize<'de>>(
@@ -925,26 +952,29 @@ pub async fn search_conversations(query: String) -> Result<SearchResponse, Strin
 }
 
 pub async fn list_turns(conv_id: String, page_size: usize) -> Result<ListTurnsResponse, String> {
+    let enc_id = url_encode_query(&conv_id);
     request_json(
         "GET",
-        &format!("/v1/conversations/{conv_id}/turns?page_size={page_size}"),
+        &format!("/v1/conversations/{enc_id}/turns?page_size={page_size}"),
         None,
     )
     .await
 }
 
 pub async fn delete_conversation(conv_id: String) -> Result<String, String> {
+    let enc_id = url_encode_query(&conv_id);
     let _: serde_json::Value =
-        request_json("DELETE", &format!("/v1/conversations/{conv_id}"), None).await?;
+        request_json("DELETE", &format!("/v1/conversations/{enc_id}"), None).await?;
     Ok(conv_id)
 }
 
 pub async fn rename_conversation(conv_id: String, title: String) -> Result<(String, String), String> {
+    let enc_id = url_encode_query(&conv_id);
     let body = serde_json::to_vec(&serde_json::json!({ "title": title }))
         .map_err(|e| e.to_string())?;
     let _: serde_json::Value = request_json(
         "PATCH",
-        &format!("/v1/conversations/{conv_id}"),
+        &format!("/v1/conversations/{enc_id}"),
         Some(&body),
     )
     .await?;
@@ -952,11 +982,12 @@ pub async fn rename_conversation(conv_id: String, title: String) -> Result<(Stri
 }
 
 pub async fn pin_conversation(conv_id: String, pinned: bool) -> Result<(String, bool), String> {
+    let enc_id = url_encode_query(&conv_id);
     let body = serde_json::to_vec(&serde_json::json!({ "pinned": pinned }))
         .map_err(|e| e.to_string())?;
     let _: serde_json::Value = request_json(
         "PATCH",
-        &format!("/v1/conversations/{conv_id}"),
+        &format!("/v1/conversations/{enc_id}"),
         Some(&body),
     )
     .await?;
@@ -973,8 +1004,9 @@ pub async fn upsert_notebook(nb: Notebook) -> Result<Notebook, String> {
 }
 
 pub async fn delete_notebook(id: String) -> Result<String, String> {
+    let enc_id = url_encode_query(&id);
     let _: serde_json::Value =
-        request_json("DELETE", &format!("/v1/notebooks/{id}"), None).await?;
+        request_json("DELETE", &format!("/v1/notebooks/{enc_id}"), None).await?;
     Ok(id)
 }
 
@@ -988,19 +1020,22 @@ pub async fn create_schedule(task: ScheduledTask) -> Result<ScheduledTask, Strin
 }
 
 pub async fn patch_schedule(id: String, enabled: bool) -> Result<ScheduledTask, String> {
+    let enc_id = url_encode_query(&id);
     let body = serde_json::to_vec(&serde_json::json!({ "enabled": enabled }))
         .map_err(|e| e.to_string())?;
-    request_json("PATCH", &format!("/v1/schedules/{id}"), Some(&body)).await
+    request_json("PATCH", &format!("/v1/schedules/{enc_id}"), Some(&body)).await
 }
 
 pub async fn delete_schedule(id: String) -> Result<String, String> {
+    let enc_id = url_encode_query(&id);
     let _: serde_json::Value =
-        request_json("DELETE", &format!("/v1/schedules/{id}"), None).await?;
+        request_json("DELETE", &format!("/v1/schedules/{enc_id}"), None).await?;
     Ok(id)
 }
 
 pub async fn run_schedule_now(id: String) -> Result<ScheduleRunResult, String> {
-    request_json("POST", &format!("/v1/schedules/{id}/run"), Some(b"{}")).await
+    let enc_id = url_encode_query(&id);
+    request_json("POST", &format!("/v1/schedules/{enc_id}/run"), Some(b"{}")).await
 }
 
 pub async fn list_library() -> Result<LibraryResponse, String> {
@@ -1026,11 +1061,12 @@ pub async fn get_usage() -> Result<UsageInfo, String> {
 }
 
 pub async fn share_conversation(conv_id: String, title: String) -> Result<ShareResponse, String> {
+    let enc_id = url_encode_query(&conv_id);
     let body = serde_json::to_vec(&serde_json::json!({ "title": title }))
         .map_err(|e| e.to_string())?;
     request_json(
         "POST",
-        &format!("/v1/conversations/{conv_id}/share"),
+        &format!("/v1/conversations/{enc_id}/share"),
         Some(&body),
     )
     .await
@@ -1040,11 +1076,12 @@ pub async fn mark_conversation_unread(
     conv_id: String,
     unread: bool,
 ) -> Result<(String, bool), String> {
+    let enc_id = url_encode_query(&conv_id);
     let body = serde_json::to_vec(&serde_json::json!({ "unread": unread }))
         .map_err(|e| e.to_string())?;
     let _: serde_json::Value = request_json(
         "PATCH",
-        &format!("/v1/conversations/{conv_id}"),
+        &format!("/v1/conversations/{enc_id}"),
         Some(&body),
     )
     .await?;
@@ -1090,11 +1127,12 @@ pub async fn add_conversation_to_notebook(
     notebook_id: String,
     conv_id: String,
 ) -> Result<(), String> {
+    let enc_nb = url_encode_query(&notebook_id);
     let body = serde_json::to_vec(&serde_json::json!({ "conversation_id": conv_id }))
         .map_err(|e| e.to_string())?;
     let _: serde_json::Value = request_json(
         "POST",
-        &format!("/v1/notebooks/{notebook_id}/conversations"),
+        &format!("/v1/notebooks/{enc_nb}/conversations"),
         Some(&body),
     )
     .await?;
@@ -1145,6 +1183,49 @@ impl LineBuffer {
         }
         Some(s)
     }
+
+    fn take_remaining_utf8_line(&mut self) -> Option<String> {
+        if self.offset >= self.buf.len() {
+            return None;
+        }
+        let mut line_bytes = &self.buf[self.offset..];
+        if line_bytes.last() == Some(&b'\r') {
+            line_bytes = &line_bytes[..line_bytes.len() - 1];
+        }
+        let s = String::from_utf8_lossy(line_bytes).into_owned();
+        self.buf.clear();
+        self.offset = 0;
+        Some(s)
+    }
+}
+
+fn dispatch_chat_sse_event(
+    ev: &str,
+    data: &str,
+    tx: &mut iced::futures::channel::mpsc::Sender<StreamEvent>,
+    sent_terminal: &mut bool,
+) -> bool {
+    if ev == "error" {
+        let msg = serde_json::from_str::<serde_json::Value>(data)
+            .ok()
+            .and_then(|v| v.get("error")?.as_str().map(String::from))
+            .unwrap_or_else(|| data.to_string());
+        *sent_terminal = true;
+        let _ = tx.try_send(StreamEvent::Error(msg));
+        return true;
+    }
+    if let Ok(chunk) = serde_json::from_str::<ChatStreamChunk>(data) {
+        let item = if ev == "done" {
+            *sent_terminal = true;
+            StreamEvent::Done(chunk)
+        } else {
+            StreamEvent::Chunk(chunk)
+        };
+        if tx.try_send(item).is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// Chunked 또는 Plain HTTP 바디에서 SSE 이벤트를 실시간 스트리밍으로 방출한다.
@@ -1169,7 +1250,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
 
         if status >= 400 {
             let mut rest = Vec::new();
-            let _ = reader.read_to_end(&mut rest).await;
+            let _ = reader.take(64 * 1024).read_to_end(&mut rest).await;
             let _ = tx.try_send(StreamEvent::Error(format!(
                 "HTTP {status}: {}",
                 String::from_utf8_lossy(&rest)
@@ -1180,6 +1261,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
         let mut pending = LineBuffer::default();
         let mut cur_event = String::new();
         let mut cur_data = String::new();
+        let mut sent_terminal = false;
 
         loop {
             let piece: Vec<u8> = if chunked {
@@ -1191,6 +1273,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                         let sz = match usize::from_str_radix(hex, 16) {
                             Ok(v) => v,
                             Err(e) => {
+                                sent_terminal = true;
                                 let _ = tx.try_send(StreamEvent::Error(format!(
                                     "SSE chunk 크기 파싱 실패 ({hex}): {e}"
                                 )));
@@ -1200,18 +1283,33 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                         if sz == 0 {
                             break;
                         }
+                        if sz > MAX_HTTP_BODY_BYTES {
+                            sent_terminal = true;
+                            let _ = tx.try_send(StreamEvent::Error(
+                                "SSE chunk 크기가 최대 허용 한도를 초과했습니다".into(),
+                            ));
+                            break;
+                        }
                         let mut buf = vec![0u8; sz];
                         if let Err(e) = reader.read_exact(&mut buf).await {
+                            sent_terminal = true;
                             let _ = tx.try_send(StreamEvent::Error(format!(
                                 "SSE chunk 읽기 실패: {e}"
                             )));
                             break;
                         }
                         let mut crlf = [0u8; 2];
-                        let _ = reader.read_exact(&mut crlf).await;
+                        if let Err(e) = reader.read_exact(&mut crlf).await {
+                            sent_terminal = true;
+                            let _ = tx.try_send(StreamEvent::Error(format!(
+                                "SSE chunk 종결 CRLF 읽기 실패: {e}"
+                            )));
+                            break;
+                        }
                         buf
                     }
                     Err(e) => {
+                        sent_terminal = true;
                         let _ = tx.try_send(StreamEvent::Error(format!("스트림 읽기 오류: {e}")));
                         break;
                     }
@@ -1222,6 +1320,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                     Ok(0) => break,
                     Ok(_) => line,
                     Err(e) => {
+                        sent_terminal = true;
                         let _ = tx.try_send(StreamEvent::Error(format!("스트림 읽기 오류: {e}")));
                         break;
                     }
@@ -1234,21 +1333,8 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                     if !cur_data.is_empty() {
                         let ev = std::mem::take(&mut cur_event);
                         let data = std::mem::take(&mut cur_data);
-                        if ev == "error" {
-                            let msg = serde_json::from_str::<serde_json::Value>(&data)
-                                .ok()
-                                .and_then(|v| v.get("error")?.as_str().map(String::from))
-                                .unwrap_or(data);
-                            let _ = tx.try_send(StreamEvent::Error(msg));
-                        } else if let Ok(chunk) = serde_json::from_str::<ChatStreamChunk>(&data) {
-                            let item = if ev == "done" {
-                                StreamEvent::Done(chunk)
-                            } else {
-                                StreamEvent::Chunk(chunk)
-                            };
-                            if tx.try_send(item).is_err() {
-                                return;
-                            }
+                        if !dispatch_chat_sse_event(&ev, &data, &mut tx, &mut sent_terminal) {
+                            return;
                         }
                     } else {
                         cur_event.clear();
@@ -1262,6 +1348,30 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
                     cur_data.push_str(rest.trim());
                 }
             }
+        }
+
+        // EOF 직전 개행 없이 남은 마지막 줄과 미플러시 이벤트를 정리한다.
+        if let Some(last_line) = pending.take_remaining_utf8_line() {
+            if let Some(rest) = last_line.strip_prefix("event:") {
+                cur_event = rest.trim().to_string();
+            } else if let Some(rest) = last_line.strip_prefix("data:") {
+                if !cur_data.is_empty() {
+                    cur_data.push('\n');
+                }
+                cur_data.push_str(rest.trim());
+            }
+        }
+        if !cur_data.is_empty() {
+            let ev = std::mem::take(&mut cur_event);
+            let data = std::mem::take(&mut cur_data);
+            if !dispatch_chat_sse_event(&ev, &data, &mut tx, &mut sent_terminal) {
+                return;
+            }
+        }
+        if !sent_terminal {
+            let _ = tx.try_send(StreamEvent::Error(
+                "스트림이 완료 신호 없이 종료되었습니다".into(),
+            ));
         }
     })
     .boxed()
@@ -1376,5 +1486,18 @@ mod tests {
         assert_eq!(line1, "data: {\"text\":\"한글 스트리밍\"}");
         let line2 = pending.take_next_utf8_line().expect("빈 구분 줄이 추출되어야 함");
         assert_eq!(line2, "");
+    }
+
+    #[test]
+    fn 개행_없는_마지막_sse_줄_플러시_및_경로_인코딩() {
+        let mut pending = LineBuffer::default();
+        pending.extend_from_slice(b"data: {\"done\":true}");
+        assert!(pending.take_next_utf8_line().is_none());
+        assert_eq!(
+            pending.take_remaining_utf8_line().as_deref(),
+            Some("data: {\"done\":true}")
+        );
+        assert!(pending.take_remaining_utf8_line().is_none());
+        assert_eq!(url_encode_query("c_1/2?x=1#a"), "c_1%2F2%3Fx%3D1%23a");
     }
 }

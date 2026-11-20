@@ -961,7 +961,7 @@ impl App {
                         .spacing(7)
                         .align_y(Alignment::Center),
                     )
-                    .on_press(Message::AddConvToNotebook(nb.id.clone(), cid.clone()))
+                    .on_press(Message::AddConvToNotebook(cid.clone(), nb.id.clone()))
                     .width(Fill)
                     .padding([6, 10])
                     .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 8.0)),

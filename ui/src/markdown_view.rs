@@ -179,14 +179,21 @@ impl ParsedMarkdown {
         full_text: &str,
         defer_reparse: bool,
     ) -> bool {
+        let tail_start = full_text.len().saturating_sub(96);
+        let mut tail_idx = tail_start;
+        while tail_idx < full_text.len() && !full_text.is_char_boundary(tail_idx) {
+            tail_idx += 1;
+        }
+        let tail = &full_text[tail_idx..];
+
         let has_structural = prev_ended_star
             || delta.contains('*')
             || delta.contains('|')
-            || delta.contains("googleusercontent.com/")
-            || delta.contains("<br")
-            || delta.contains("<BR")
+            || delta.contains('<')
             || delta.contains('`')
-            || delta.contains('~');
+            || delta.contains('~')
+            || tail.contains("googleusercontent.com/")
+            || contains_br_tag_ci(tail);
 
         if !has_structural && !delta.is_empty() {
             if let Some(MarkdownBlock::Rich(content)) = self.blocks.last_mut() {
@@ -1008,10 +1015,33 @@ pub(crate) fn turn_attachment_cache_key(url: &str) -> String {
     format!("turn_att:{url}")
 }
 
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    s.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
+fn contains_br_tag_ci(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 4 {
+        return false;
+    }
+    for i in 0..=bytes.len() - 4 {
+        if bytes[i] == b'<'
+            && bytes[i + 1].eq_ignore_ascii_case(&b'b')
+            && bytes[i + 2].eq_ignore_ascii_case(&b'r')
+            && matches!(bytes[i + 3], b'>' | b'/' | b' ')
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Canvas 아티팩트가 Deep Research 보고서 등 마크다운 문서인지 판별한다.
 pub(crate) fn is_markdown_artifact(art: &TurnArtifact) -> bool {
-    let lang = art.language.trim().to_ascii_lowercase();
-    if lang == "markdown" || lang == "md" {
+    let lang = art.language.trim();
+    if lang.eq_ignore_ascii_case("markdown") || lang.eq_ignore_ascii_case("md") {
         return true;
     }
     if !lang.is_empty() {
@@ -1021,10 +1051,9 @@ pub(crate) fn is_markdown_artifact(art: &TurnArtifact) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    let head_lower = trimmed.to_ascii_lowercase();
-    if head_lower.starts_with("<!doctype html")
-        || head_lower.starts_with("<html")
-        || head_lower.starts_with("<?xml")
+    if starts_with_ignore_ascii_case(trimmed, "<!doctype html")
+        || starts_with_ignore_ascii_case(trimmed, "<html")
+        || starts_with_ignore_ascii_case(trimmed, "<?xml")
         || trimmed.starts_with('{')
         || trimmed.starts_with('[')
         || trimmed.starts_with("import ")
@@ -1523,7 +1552,6 @@ impl<'p> GeminiMarkdownViewer<'p> {
         }))
         .spacing(0);
 
-        let pal_scroll = self.palette.clone();
         let body = scrollable(container(code_lines).padding([12, 16]))
             .width(Fill)
             .direction(scrollable::Direction::Horizontal(
@@ -1531,7 +1559,7 @@ impl<'p> GeminiMarkdownViewer<'p> {
                     .width(5)
                     .scroller_width(5),
             ))
-            .style(move |_, status| pal_scroll.subtle_code_scrollable_style(status));
+            .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(text_code, status));
 
         let bg_code = self.palette.bg_code;
         let border_col = self.palette.border_subtle;
@@ -1784,7 +1812,7 @@ impl<'p> GeminiMarkdownViewer<'p> {
             table_col = table_col.push(data_row);
         }
 
-        let pal_scroll = self.palette.clone();
+        let scroll_fg = self.palette.text_primary;
         let h_scroll = scrollable(table_col)
             .width(Fill)
             .direction(scrollable::Direction::Horizontal(
@@ -1792,7 +1820,7 @@ impl<'p> GeminiMarkdownViewer<'p> {
                     .width(5)
                     .scroller_width(5),
             ))
-            .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
+            .style(move |_, status| AppTheme::subtle_scrollable_style_with_fg(scroll_fg, status));
 
         // 하단 우측 복사 바 (프레임마다 표 원문을 클론하지 않고 블록 인덱스로 지연 복사)
         let copy_target = self.copy_target;
@@ -2235,11 +2263,11 @@ impl<'p> GeminiMarkdownViewer<'p> {
             );
         }
 
-        let head_lower = art.content.trim_start().to_ascii_lowercase();
+        let trimmed_head = art.content.trim_start();
         let is_html = art.language.eq_ignore_ascii_case("html")
             || art.language.eq_ignore_ascii_case("htm")
-            || head_lower.starts_with("<!doctype html")
-            || head_lower.starts_with("<html");
+            || starts_with_ignore_ascii_case(trimmed_head, "<!doctype html")
+            || starts_with_ignore_ascii_case(trimmed_head, "<html");
         if is_html && !art.content.is_empty() {
             actions = actions.push(
                 button(text(t(loc, "브라우저에서 실행")).size(12).color(accent))
@@ -2660,5 +2688,18 @@ mod tests {
         assert_eq!(code1.trim(), "print(1)");
 
         assert!(parsed.code_block_text(2, 2).is_none());
+    }
+
+    #[test]
+    fn 청크_경계_br_태그와_이미지_플레이스홀더_분할_감지() {
+        let mut parsed = ParsedMarkdown::parse("첫 줄<");
+        let full1 = "첫 줄<Br/>둘째 줄";
+        // `<`와 `Br/>`가 서로 다른 청크로 분할되어도 대소문자 무관하게 구조 변경으로 감지해야 한다.
+        assert!(parsed.push_delta(false, "Br/>둘째 줄", full1, true));
+
+        let mut img_parsed =
+            ParsedMarkdown::parse("이미지: http://googleusercontent.com/image_generation_");
+        let full2 = "이미지: http://googleusercontent.com/image_generation_content/0";
+        assert!(img_parsed.push_delta(false, "content/0", full2, true));
     }
 }
