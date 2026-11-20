@@ -32,7 +32,7 @@ use ipc::{
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use theme::{AppTheme, ThemeMode, font_medium, font_regular, font_semibold};
 
 const CHAT_SCROLL_ID: &str = "chat_scroll";
@@ -208,14 +208,22 @@ impl ChatMessage {
         }
     }
 
-    fn push_delta(&mut self, delta: &str, full_text: &str) {
-        if !delta.is_empty() && full_text.starts_with(&self.raw_text) {
-            let prev = self.raw_text.clone();
+    fn push_delta(&mut self, delta: &str, full_text: &str, defer_reparse: bool) -> bool {
+        if !delta.is_empty() && (full_text.is_empty() || full_text.starts_with(&self.raw_text)) {
+            let prev_ended_star = self.raw_text.ends_with('*');
             self.raw_text.push_str(delta);
-            self.markdown.push_delta(&prev, delta, &self.raw_text);
+            self.markdown
+                .push_delta(prev_ended_star, delta, &self.raw_text, defer_reparse)
         } else if !full_text.is_empty() && full_text != self.raw_text {
             self.raw_text = full_text.to_string();
-            self.markdown = markdown_view::ParsedMarkdown::parse(&self.raw_text);
+            if defer_reparse {
+                true
+            } else {
+                self.markdown = markdown_view::ParsedMarkdown::parse(&self.raw_text);
+                false
+            }
+        } else {
+            false
         }
     }
 }
@@ -333,6 +341,14 @@ pub(crate) struct App {
     is_streaming: bool,
     streaming_req_id: String,
     stream_abort_handle: Option<task::Handle>,
+    last_stream_reparse: Option<Instant>,
+    last_stream_scroll: Option<Instant>,
+    stream_markdown_dirty: bool,
+    stream_had_attachments: bool,
+
+    // 캔버스 지오메트리 캐시 (테마/모드 변경 시 무효화)
+    welcome_glow_cache: canvas::Cache,
+    avatar_mask_cache: canvas::Cache,
 
     error_banner: Option<String>,
     toast: Option<(String, u8)>,
@@ -341,6 +357,7 @@ pub(crate) struct App {
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     Tick,
+    OmarchyThemeChanged(String),
     SystemThemeChanged(iced::theme::Mode),
     RuntimeEvent(Event),
 
@@ -510,6 +527,10 @@ pub(crate) enum Message {
     AbortFinished(Result<(), String>),
 
     CopyText(String),
+    CopyChatItem(usize),
+    CopyCanvasPreview,
+    CopyMarkdownTable(markdown_view::CopyTarget, usize),
+    CopyMarkdownCode(markdown_view::CopyTarget, usize, usize),
     LinkClicked(markdown::Uri),
     OpenExternalUrl(String),
     DismissError,
@@ -608,6 +629,12 @@ impl App {
             is_streaming: false,
             streaming_req_id: String::new(),
             stream_abort_handle: None,
+            last_stream_reparse: None,
+            last_stream_scroll: None,
+            stream_markdown_dirty: false,
+            stream_had_attachments: false,
+            welcome_glow_cache: canvas::Cache::new(),
+            avatar_mask_cache: canvas::Cache::new(),
             error_banner: None,
             toast: None,
         };
@@ -626,7 +653,6 @@ impl App {
             Task::perform(ipc::list_conversations(60), Message::ConversationsLoaded),
             Task::perform(ipc::list_notebooks(), Message::NotebooksLoaded),
             Task::perform(ipc::list_schedules(), Message::SchedulesLoaded),
-            Task::perform(ipc::list_library(), Message::LibraryLoaded),
         ]);
         (app, init)
     }
@@ -643,13 +669,81 @@ impl App {
         self.palette.to_iced_theme()
     }
 
+    fn clear_canvas_caches(&mut self) {
+        self.welcome_glow_cache.clear();
+        self.avatar_mask_cache.clear();
+    }
+
+    fn preload_library_images(&self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        for item in self.library_items.iter() {
+            if item.kind == "image"
+                && !item.url.is_empty()
+                && !self.library_image_cache.contains_key(&item.id)
+                && !self.failed_image_keys.contains(&item.id)
+            {
+                let id = item.id.clone();
+                let url = item.url.clone();
+                tasks.push(Task::perform(ipc::fetch_library_image(url), move |r| {
+                    Message::LibraryImageLoaded(id, r)
+                }));
+                if tasks.len() >= 24 {
+                    break;
+                }
+            }
+        }
+        if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        }
+    }
+
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            time::every(Duration::from_secs(1)).map(|_| Message::Tick),
+        let mut subs = vec![
             system::theme_changes().map(Message::SystemThemeChanged),
-            event::listen().map(Message::RuntimeEvent),
+            event::listen_with(|ev, _status, _id| {
+                let interested = match &ev {
+                    Event::Window(
+                        window::Event::FileHovered(_)
+                        | window::Event::FilesHoveredLeft
+                        | window::Event::FileDropped(_),
+                    ) => true,
+                    Event::Keyboard(keyboard::Event::KeyPressed {
+                        key, modifiers, ..
+                    }) => {
+                        if modifiers.control() {
+                            matches!(
+                                key,
+                                keyboard::Key::Character(ch)
+                                    if matches!(ch.as_str(), "n" | "N" | "b" | "B" | "k" | "K")
+                            )
+                        } else {
+                            matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                        }
+                    }
+                    _ => false,
+                };
+                if interested {
+                    Some(Message::RuntimeEvent(ev))
+                } else {
+                    None
+                }
+            }),
             Subscription::run(ipc::stream_remote_events).map(Message::RemoteEventReceived),
-        ])
+        ];
+
+        // 녹음 중이거나 토스트 표시 중일 때만 1초 타이머를 구동해 유휴 리드로우를 0으로 줄인다.
+        if self.voice_recorder.is_some() || self.toast.is_some() {
+            subs.push(time::every(Duration::from_secs(1)).map(|_| Message::Tick));
+        }
+
+        // System 테마 모드에서는 백그라운드 스트림이 실제 Omarchy 테마 변경 시점에만 메시지를 보낸다.
+        if self.theme_mode == ThemeMode::System {
+            subs.push(Subscription::run(watch_omarchy_theme).map(Message::OmarchyThemeChanged));
+        }
+
+        Subscription::batch(subs)
     }
 
     fn scroll_to_bottom() -> Task<Message> {
@@ -744,13 +838,6 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tick => {
-                if self.theme_mode == ThemeMode::System
-                    && let Some(generation) = AppTheme::current_omarchy_generation()
-                    && generation != self.palette.generation
-                {
-                    self.palette =
-                        AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
-                }
                 if self.voice_recorder.is_some() {
                     self.recording_seconds = self.recording_seconds.saturating_add(1);
                 }
@@ -763,11 +850,20 @@ impl App {
                 }
                 Task::none()
             }
+            Message::OmarchyThemeChanged(generation) => {
+                if self.theme_mode == ThemeMode::System && generation != self.palette.generation {
+                    self.palette =
+                        AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
+                    self.clear_canvas_caches();
+                }
+                Task::none()
+            }
             Message::SystemThemeChanged(mode) => {
                 self.system_dark_fallback = matches!(mode, iced::theme::Mode::Dark);
                 if self.theme_mode == ThemeMode::System {
                     self.palette =
                         AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
+                    self.clear_canvas_caches();
                 }
                 Task::none()
             }
@@ -1060,26 +1156,13 @@ impl App {
             Message::SchedulesLoaded(Err(_)) => Task::none(),
             Message::LibraryLoaded(Ok(res)) => {
                 self.library_items = res.items;
-                let mut tasks = Vec::new();
-                for item in self.library_items.iter() {
-                    if item.kind == "image"
-                        && !item.url.is_empty()
-                        && !self.library_image_cache.contains_key(&item.id)
-                    {
-                        let id = item.id.clone();
-                        let url = item.url.clone();
-                        tasks.push(Task::perform(ipc::fetch_library_image(url), move |r| {
-                            Message::LibraryImageLoaded(id, r)
-                        }));
-                        if tasks.len() >= 24 {
-                            break;
-                        }
-                    }
-                }
-                if tasks.is_empty() {
-                    Task::none()
+                if matches!(
+                    self.active_section,
+                    ActiveSection::Library | ActiveSection::Images
+                ) {
+                    self.preload_library_images()
                 } else {
-                    Task::batch(tasks)
+                    Task::none()
                 }
             }
             Message::LibraryLoaded(Err(_)) => Task::none(),
@@ -1117,6 +1200,7 @@ impl App {
                     self.theme_mode = next_mode;
                     self.palette =
                         AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
+                    self.clear_canvas_caches();
                 }
                 let next_lang = LanguagePref::from_str(&prefs.language);
                 self.language_pref = next_lang;
@@ -1176,9 +1260,10 @@ impl App {
                 self.conv_menu_target = None;
                 self.active_section = sec.clone();
                 match sec {
-                    ActiveSection::Library => {
-                        Task::perform(ipc::list_library(), Message::LibraryLoaded)
-                    }
+                    ActiveSection::Library | ActiveSection::Images => Task::batch([
+                        Task::perform(ipc::list_library(), Message::LibraryLoaded),
+                        self.preload_library_images(),
+                    ]),
                     ActiveSection::Schedules => {
                         Task::perform(ipc::list_schedules(), Message::SchedulesLoaded)
                     }
@@ -1306,6 +1391,7 @@ impl App {
             Message::SetThemeMode(mode) => {
                 self.theme_mode = mode;
                 self.palette = AppTheme::load_with_mode(mode, self.system_dark_fallback);
+                self.clear_canvas_caches();
                 let lbl = mode.label_for(self.locale);
                 self.show_toast(if self.locale.is_en() {
                     format!("Theme: {lbl}")
@@ -2249,7 +2335,10 @@ impl App {
 
             // --- 입력창 · 화면 공유 · 마이크 · 스트리밍 ---
             Message::SetComposerMode(mode) => {
-                self.composer_mode = mode;
+                if self.composer_mode != mode {
+                    self.composer_mode = mode;
+                    self.welcome_glow_cache.clear();
+                }
                 Task::none()
             }
             Message::ToggleTemporary => {
@@ -2466,34 +2555,64 @@ impl App {
             Message::StreamReceived(ev) => match ev {
                 StreamEvent::Chunk(ch) => {
                     self.apply_chunk(&ch, false);
-                    Self::scroll_to_bottom()
+                    const STREAM_SCROLL_INTERVAL: Duration = Duration::from_millis(60);
+                    let now = Instant::now();
+                    if self
+                        .last_stream_scroll
+                        .is_none_or(|prev| now.duration_since(prev) >= STREAM_SCROLL_INTERVAL)
+                    {
+                        self.last_stream_scroll = Some(now);
+                        Self::scroll_to_bottom()
+                    } else {
+                        Task::none()
+                    }
                 }
                 StreamEvent::Done(ch) => {
                     self.apply_chunk(&ch, true);
                     self.is_streaming = false;
                     self.stream_abort_handle = None;
+                    let had_attachments = std::mem::take(&mut self.stream_had_attachments);
                     if !self.temporary_chat {
                         let mut tasks = vec![
                             Task::perform(
                                 ipc::list_conversations(60),
                                 Message::ConversationsLoaded,
                             ),
-                            Task::perform(ipc::list_library(), Message::LibraryLoaded),
                             Self::scroll_to_bottom(),
                         ];
                         // 방금 완료된 응답에 생성 이미지 플레이스홀더나 미보강 Canvas 칩이 있으면
                         // 최신 턴을 재조회해 실제 생성 이미지 URL·아티팩트를 즉시 렌더링한다.
-                        let needs_turn_refresh = self.messages.last().is_some_and(|m| {
-                            m.role == Role::Model
-                                && ((m
+                        let (needs_turn_refresh, has_generated_or_artifact) = self
+                            .messages
+                            .last()
+                            .filter(|m| m.role == Role::Model)
+                            .map(|m| {
+                                let has_img_ref = m
                                     .raw_text
-                                    .contains("googleusercontent.com/image_generation_content/")
-                                    && m.generated_images.is_empty())
-                                    || (m
-                                        .raw_text
-                                        .contains("googleusercontent.com/immersive_entry_chip/")
-                                        && m.artifacts.is_empty()))
-                        });
+                                    .contains("googleusercontent.com/image_generation_content/");
+                                let has_canvas_ref = m
+                                    .raw_text
+                                    .contains("googleusercontent.com/immersive_entry_chip/");
+                                let needs_refresh = (has_img_ref && m.generated_images.is_empty())
+                                    || (has_canvas_ref && m.artifacts.is_empty());
+                                let has_media = has_img_ref
+                                    || has_canvas_ref
+                                    || !m.generated_images.is_empty()
+                                    || !m.artifacts.is_empty();
+                                (needs_refresh, has_media)
+                            })
+                            .unwrap_or((false, false));
+
+                        if needs_turn_refresh
+                            || had_attachments
+                            || has_generated_or_artifact
+                            || matches!(
+                                self.active_section,
+                                ActiveSection::Library | ActiveSection::Images
+                            )
+                        {
+                            tasks.push(Task::perform(ipc::list_library(), Message::LibraryLoaded));
+                        }
                         if needs_turn_refresh
                             && let Some(conv_id) = self.active_conv_id.clone()
                         {
@@ -2509,8 +2628,10 @@ impl App {
                     }
                 }
                 StreamEvent::Error(err) => {
+                    self.flush_dirty_stream_markdown();
                     self.is_streaming = false;
                     self.stream_abort_handle = None;
+                    self.stream_had_attachments = false;
                     self.error_banner = Some(if self.locale.is_en() {
                         format!("Streaming error: {err}")
                     } else {
@@ -2521,6 +2642,7 @@ impl App {
             },
             Message::AbortStream => {
                 self.cancel_active_stream();
+                self.flush_dirty_stream_markdown();
                 if let Some(last) = self.messages.last_mut()
                     && last.role == Role::Model
                 {
@@ -2553,6 +2675,60 @@ impl App {
                 self.show_toast(t(self.locale, "클립보드에 복사되었습니다"));
                 clipboard::write(content)
             }
+            Message::CopyChatItem(idx) => {
+                if let Some(msg) = self.messages.get(idx) {
+                    let content = msg.raw_text.clone();
+                    self.show_toast(t(self.locale, "클립보드에 복사되었습니다"));
+                    clipboard::write(content)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::CopyCanvasPreview => {
+                if let Some(preview) = &self.canvas_preview {
+                    let content = preview.artifact.content.clone();
+                    self.show_toast(t(self.locale, "클립보드에 복사되었습니다"));
+                    clipboard::write(content)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::CopyMarkdownTable(target, block_idx) => {
+                let parsed = match target {
+                    markdown_view::CopyTarget::Message(msg_idx) => {
+                        self.messages.get(msg_idx).map(|m| &m.markdown)
+                    }
+                    markdown_view::CopyTarget::CanvasPreview => self
+                        .canvas_preview
+                        .as_ref()
+                        .and_then(|p| p.parsed_markdown.as_ref()),
+                };
+                if let Some(raw) = parsed.and_then(|p| p.table_raw_markdown(block_idx)) {
+                    let content = raw.to_string();
+                    self.show_toast(t(self.locale, "클립보드에 복사되었습니다"));
+                    clipboard::write(content)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::CopyMarkdownCode(target, block_idx, code_idx) => {
+                let parsed = match target {
+                    markdown_view::CopyTarget::Message(msg_idx) => {
+                        self.messages.get(msg_idx).map(|m| &m.markdown)
+                    }
+                    markdown_view::CopyTarget::CanvasPreview => self
+                        .canvas_preview
+                        .as_ref()
+                        .and_then(|p| p.parsed_markdown.as_ref()),
+                };
+                if let Some(code) = parsed.and_then(|p| p.code_block_text(block_idx, code_idx)) {
+                    let content = code.to_string();
+                    self.show_toast(t(self.locale, "클립보드에 복사되었습니다"));
+                    clipboard::write(content)
+                } else {
+                    Task::none()
+                }
+            }
             Message::LinkClicked(url) => {
                 if !open_safe_external_url(&url) {
                     self.show_toast(t(self.locale, "안전하지 않은 링크 형식은 열 수 없습니다"));
@@ -2581,6 +2757,10 @@ impl App {
         self.mention_query = None;
         self.is_streaming = true;
         self.streaming_req_id.clear();
+        self.last_stream_reparse = None;
+        self.last_stream_scroll = None;
+        self.stream_markdown_dirty = false;
+        self.stream_had_attachments = !files.is_empty();
 
         let file_names: Vec<String> = files
             .iter()
@@ -2710,6 +2890,17 @@ impl App {
         }
     }
 
+    fn flush_dirty_stream_markdown(&mut self) {
+        if self.stream_markdown_dirty {
+            if let Some(last) = self.messages.last_mut()
+                && last.role == Role::Model
+            {
+                last.markdown = markdown_view::ParsedMarkdown::parse(&last.raw_text);
+            }
+            self.stream_markdown_dirty = false;
+        }
+    }
+
     fn apply_chunk(&mut self, ch: &ChatStreamChunk, is_done: bool) {
         if !ch.conversation_id.is_empty() && !self.temporary_chat {
             self.active_conv_id = Some(ch.conversation_id.clone());
@@ -2733,7 +2924,32 @@ impl App {
         if let Some(last) = self.messages.last_mut()
             && last.role == Role::Model
         {
-            last.push_delta(&ch.delta, &ch.text);
+            const STREAM_REPARSE_INTERVAL: Duration = Duration::from_millis(80);
+            let now = Instant::now();
+            let can_reparse = is_done
+                || self
+                    .last_stream_reparse
+                    .is_none_or(|prev| now.duration_since(prev) >= STREAM_REPARSE_INTERVAL);
+
+            if self.stream_markdown_dirty && can_reparse {
+                if !ch.delta.is_empty()
+                    && (ch.text.is_empty() || ch.text.starts_with(&last.raw_text))
+                {
+                    last.raw_text.push_str(&ch.delta);
+                } else if !ch.text.is_empty() {
+                    last.raw_text = ch.text.clone();
+                }
+                last.markdown = markdown_view::ParsedMarkdown::parse(&last.raw_text);
+                self.stream_markdown_dirty = false;
+                self.last_stream_reparse = Some(now);
+            } else {
+                let deferred = last.push_delta(&ch.delta, &ch.text, !can_reparse);
+                if deferred {
+                    self.stream_markdown_dirty = true;
+                } else if can_reparse && (!ch.delta.is_empty() || !ch.text.is_empty()) {
+                    self.last_stream_reparse = Some(now);
+                }
+            }
             if !ch.thoughts.is_empty() {
                 last.thoughts = ch.thoughts.clone();
             } else if !ch.thoughts_delta.is_empty() {
@@ -3121,7 +3337,10 @@ impl App {
                     .width(Length::Fixed(32.0))
                     .height(Length::Fixed(32.0))
                     .content_fit(ContentFit::Cover),
-                canvas(AvatarCircleMask { bg: bg_sidebar })
+                canvas(AvatarCircleMask {
+                    cache: &self.avatar_mask_cache,
+                    bg: bg_sidebar,
+                })
                     .width(Length::Fixed(32.0))
                     .height(Length::Fixed(32.0)),
             ]
@@ -3665,6 +3884,7 @@ impl App {
                 pal.glow_color
             };
             let glow_bg = canvas(WelcomeGlow {
+                cache: &self.welcome_glow_cache,
                 bg: pal.bg_canvas,
                 color: glow_color,
                 is_dark: pal.is_dark,
@@ -4769,7 +4989,7 @@ impl App {
                     .spacing(5)
                     .align_y(Alignment::Center),
                 )
-                .on_press(Message::CopyText(art.content.clone()))
+                .on_press(Message::CopyCanvasPreview)
                 .padding([5, 10])
                 .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 8.0)),
             );
@@ -4842,10 +5062,11 @@ impl App {
             let rendered = markdown_view::view(
                 parsed,
                 self.palette.markdown_settings(),
-                self.palette.clone(),
+                &self.palette,
                 loc,
                 markdown_view::RenderContext {
                     message_idx: msg_idx,
+                    copy_target: markdown_view::CopyTarget::CanvasPreview,
                     generated_images: &[],
                     artifacts: &[],
                     image_cache: &self.library_image_cache,
@@ -6343,7 +6564,7 @@ impl App {
                         .spacing(4)
                         .align_y(Alignment::Center),
                     )
-                    .on_press(Message::CopyText(msg.raw_text.clone()))
+                    .on_press(Message::CopyChatItem(idx))
                     .padding([3, 8])
                     .style(move |_, status| ghost_btn_style(status, bg_hover, text_muted, 8.0));
 
@@ -6694,10 +6915,11 @@ impl App {
                     let md_view = markdown_view::view(
                         &msg.markdown,
                         self.palette.markdown_settings(),
-                        self.palette.clone(),
+                        &self.palette,
                         loc,
                         markdown_view::RenderContext {
                             message_idx: idx,
+                            copy_target: markdown_view::CopyTarget::Message(idx),
                             generated_images: &msg.generated_images,
                             artifacts: &msg.artifacts,
                             image_cache: &self.library_image_cache,
@@ -6787,7 +7009,7 @@ impl App {
                                 .spacing(5)
                                 .align_y(Alignment::Center),
                             )
-                            .on_press(Message::CopyText(msg.raw_text.clone()))
+                            .on_press(Message::CopyChatItem(idx))
                             .padding([4, 10])
                             .style(move |_, status| {
                                 ghost_btn_style(status, bg_hover, text_secondary, 8.0)
@@ -7172,11 +7394,46 @@ fn format_turn_timestamp(unix_secs: i64, tz_offset_secs: i64, loc: Locale) -> St
     }
 }
 
+/// Omarchy 테마 변경 파일(generation)을 3초 간격으로 감시해 실제 변경 시에만 이벤트를 방출한다.
+fn watch_omarchy_theme() -> impl iced::futures::Stream<Item = String> {
+    iced::stream::channel(
+        4,
+        |mut tx: iced::futures::channel::mpsc::Sender<String>| async move {
+            let mut last = AppTheme::current_omarchy_generation();
+            loop {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let cur = AppTheme::current_omarchy_generation();
+                if cur != last {
+                    last = cur.clone();
+                    if let Some(generation) = cur
+                        && let Err(err) = tx.try_send(generation)
+                        && err.is_disconnected()
+                    {
+                        break;
+                    }
+                }
+            }
+        },
+    )
+}
+
 #[cfg(test)]
 mod url_safety_tests {
     use super::{
-        Locale, civil_from_days, format_turn_timestamp, is_safe_external_url, parse_tz_offset_hhmm,
+        ChatMessage, Locale, civil_from_days, format_turn_timestamp, is_safe_external_url,
+        parse_tz_offset_hhmm,
     };
+
+    #[test]
+    fn 경량_sse_빈_full_text_증분_누적() {
+        let mut msg = ChatMessage::model(String::new(), String::new(), String::new());
+        assert!(!msg.push_delta("안녕", "", true));
+        assert!(!msg.push_delta("하세요", "", true));
+        assert_eq!(msg.raw_text, "안녕하세요");
+        // 전체 교체 패킷이 오면 덮어쓴다
+        assert!(!msg.push_delta("", "최종 문장", false));
+        assert_eq!(msg.raw_text, "최종 문장");
+    }
 
     #[test]
     fn allows_only_http_and_https_schemes() {

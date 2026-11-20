@@ -17,9 +17,17 @@ const HEADING_LINE_HEIGHT: f32 = 1.38;
 const CODE_LINE_HEIGHT: f32 = 1.52;
 const TABLE_CELL_LINE_HEIGHT: f32 = 1.55;
 
+/// 복사 버튼이 프레임마다 본문·코드·표 원문을 클론하지 않고 클릭 시점에만 참조할 대상 식별자.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyTarget {
+    Message(usize),
+    CanvasPreview,
+}
+
 /// 마크다운 렌더링 시 인라인 생성 이미지·Canvas 아티팩트 매칭에 사용하는 컨텍스트.
 pub(crate) struct RenderContext<'a> {
     pub(crate) message_idx: usize,
+    pub(crate) copy_target: CopyTarget,
     pub(crate) generated_images: &'a [GeneratedImage],
     pub(crate) artifacts: &'a [TurnArtifact],
     pub(crate) image_cache: &'a HashMap<String, image::Handle>,
@@ -161,29 +169,94 @@ impl ParsedMarkdown {
         }
     }
 
-    /// 스트리밍 중 일반 텍스트 델타를 빠르게 반영한다.
-    /// 표·특수 플레이스홀더·볼드 경계가 등장하면 안전하게 전체 재파싱한다.
-    pub(crate) fn push_delta(&mut self, prev_raw: &str, delta: &str, full_text: &str) {
-        let needs_reparse = self.blocks.len() != 1
-            || !matches!(self.blocks.first(), Some(MarkdownBlock::Rich(_)))
-            || prev_raw.ends_with('*')
-            || delta.contains("**")
-            || delta.starts_with('*')
+    /// 스트리밍 중 일반 텍스트 델타를 끝 `Rich` 블록에 O(delta)로 증분 반영한다.
+    /// 표·코드펜스·볼드 경계·특수 플레이스홀더가 등장하면 전체 재파싱이 필요하며,
+    /// `defer_reparse == true`일 때는 재파싱을 지연하고 `true`(dirty)를 반환해 쓰로틀링을 지원한다.
+    pub(crate) fn push_delta(
+        &mut self,
+        prev_ended_star: bool,
+        delta: &str,
+        full_text: &str,
+        defer_reparse: bool,
+    ) -> bool {
+        let has_structural = prev_ended_star
+            || delta.contains('*')
             || delta.contains('|')
             || delta.contains("googleusercontent.com/")
             || delta.contains("<br")
-            || delta.contains("<BR");
+            || delta.contains("<BR")
+            || delta.contains('`')
+            || delta.contains('~');
 
-        if !needs_reparse
-            && !delta.is_empty()
-            && full_text.starts_with(prev_raw)
-            && let Some(MarkdownBlock::Rich(content)) = self.blocks.first_mut()
-        {
-            content.push_str(delta);
-            return;
+        if !has_structural && !delta.is_empty() {
+            if let Some(MarkdownBlock::Rich(content)) = self.blocks.last_mut() {
+                content.push_str(delta);
+                return false;
+            }
+            if self.blocks.is_empty() {
+                self.blocks
+                    .push(MarkdownBlock::Rich(Box::new(markdown::Content::parse(delta))));
+                return false;
+            }
+        }
+        if defer_reparse {
+            return true;
         }
         *self = Self::parse(full_text);
+        false
     }
+
+    /// 지정한 블록 인덱스의 커스텀 GFM 표 원문을 반환한다(클릭 시점 지연 복사).
+    pub(crate) fn table_raw_markdown(&self, block_idx: usize) -> Option<&str> {
+        match self.blocks.get(block_idx)? {
+            MarkdownBlock::Table(tbl) => Some(&tbl.raw_markdown),
+            _ => None,
+        }
+    }
+
+    /// 지정한 Rich 블록 내 `code_idx`번째 코드 블록 원문을 DFS 순회로 찾아 반환한다(클릭 시점 지연 복사).
+    pub(crate) fn code_block_text(&self, block_idx: usize, code_idx: usize) -> Option<&str> {
+        let MarkdownBlock::Rich(content) = self.blocks.get(block_idx)? else {
+            return None;
+        };
+        let mut cursor = 0usize;
+        find_code_block_in_items(content.items(), code_idx, &mut cursor)
+    }
+}
+
+fn find_code_block_in_items<'a>(
+    items: &'a [markdown::Item],
+    target: usize,
+    cursor: &mut usize,
+) -> Option<&'a str> {
+    for item in items {
+        match item {
+            markdown::Item::CodeBlock { code, .. } => {
+                if *cursor == target {
+                    return Some(code.as_str());
+                }
+                *cursor += 1;
+            }
+            markdown::Item::List { bullets, .. } => {
+                for bullet in bullets {
+                    let sub = match bullet {
+                        markdown::Bullet::Point { items }
+                        | markdown::Bullet::Task { items, .. } => items.as_slice(),
+                    };
+                    if let Some(found) = find_code_block_in_items(sub, target, cursor) {
+                        return Some(found);
+                    }
+                }
+            }
+            markdown::Item::Quote(contents) => {
+                if let Some(found) = find_code_block_in_items(contents, target, cursor) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn contains_special_placeholder(line: &str) -> bool {
@@ -871,22 +944,24 @@ fn is_parenthesized_citation_span(
 pub(crate) fn view<'a>(
     parsed: &'a ParsedMarkdown,
     settings: markdown::Settings,
-    palette: AppTheme,
+    palette: &'a AppTheme,
     locale: Locale,
     ctx: RenderContext<'a>,
 ) -> Element<'a, Message> {
-    let viewer = GeminiMarkdownViewer {
-        palette: palette.clone(),
-        locale,
-        in_table: false,
-        table_align: None,
-    };
-
     let mut children: Vec<Element<'a, Message>> = Vec::with_capacity(parsed.blocks.len() + 2);
-    for block in &parsed.blocks {
+    for (block_idx, block) in parsed.blocks.iter().enumerate() {
+        let viewer = GeminiMarkdownViewer {
+            palette,
+            locale,
+            in_table: false,
+            table_align: None,
+            copy_target: ctx.copy_target,
+            block_idx,
+        };
         match block {
             MarkdownBlock::Rich(content) => {
-                children.push(viewer.render_items(settings, content.items(), 0));
+                let mut code_cursor = 0usize;
+                children.push(viewer.render_items(settings, content.items(), 0, &mut code_cursor));
             }
             MarkdownBlock::Table(tbl) => {
                 children.push(viewer.render_custom_table(settings, tbl));
@@ -900,16 +975,25 @@ pub(crate) fn view<'a>(
         }
     }
 
+    let slot_viewer = GeminiMarkdownViewer {
+        palette,
+        locale,
+        in_table: false,
+        table_align: None,
+        copy_target: ctx.copy_target,
+        block_idx: 0,
+    };
+
     // 본문 플레이스홀더보다 생성 이미지가 더 많거나 플레이스홀더가 누락된 경우 하단에 표시
     if ctx.generated_images.len() > parsed.image_ref_count {
         for idx in parsed.image_ref_count..ctx.generated_images.len() {
-            children.push(viewer.render_generated_image_slot(idx, &ctx));
+            children.push(slot_viewer.render_generated_image_slot(idx, &ctx));
         }
     }
     // Canvas 아티팩트도 플레이스홀더에 매핑되지 않은 남은 항목이 있으면 하단에 카드로 표시
     if ctx.artifacts.len() > parsed.canvas_ref_count {
         for idx in parsed.canvas_ref_count..ctx.artifacts.len() {
-            children.push(viewer.render_canvas_card(idx, &ctx));
+            children.push(slot_viewer.render_canvas_card(idx, &ctx));
         }
     }
 
@@ -960,25 +1044,32 @@ pub(crate) fn is_markdown_artifact(art: &TurnArtifact) -> bool {
         || (trimmed.contains("**") && trimmed.contains('\n'))
 }
 
-#[derive(Clone)]
-struct GeminiMarkdownViewer {
-    palette: AppTheme,
+#[derive(Clone, Copy)]
+struct GeminiMarkdownViewer<'p> {
+    palette: &'p AppTheme,
     locale: Locale,
     in_table: bool,
     table_align: Option<alignment::Horizontal>,
+    copy_target: CopyTarget,
+    block_idx: usize,
 }
 
-impl GeminiMarkdownViewer {
+impl<'p> GeminiMarkdownViewer<'p> {
     fn render_items<'a>(
         &self,
         settings: markdown::Settings,
         items: &'a [markdown::Item],
         depth: usize,
-    ) -> Element<'a, Message> {
-        let blocks = items
+        code_cursor: &mut usize,
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
+        let blocks: Vec<Element<'a, Message>> = items
             .iter()
             .enumerate()
-            .map(|(idx, item)| self.render_item(settings, item, idx, depth));
+            .map(|(idx, item)| self.render_item(settings, item, idx, depth, code_cursor))
+            .collect();
 
         let col = column(blocks).spacing(settings.spacing);
         if self.in_table {
@@ -994,7 +1085,11 @@ impl GeminiMarkdownViewer {
         item: &'a markdown::Item,
         index: usize,
         depth: usize,
-    ) -> Element<'a, Message> {
+        code_cursor: &mut usize,
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
         match item {
             markdown::Item::Image { url, title, alt } => {
                 self.render_image(settings, url, title, alt)
@@ -1007,16 +1102,20 @@ impl GeminiMarkdownViewer {
                 language,
                 code,
                 lines,
-            } => self.render_code_block(settings, language.as_deref(), code, lines),
+            } => {
+                let code_idx = *code_cursor;
+                *code_cursor += 1;
+                self.render_code_block(settings, language.as_deref(), code, lines, code_idx)
+            }
             markdown::Item::List {
                 start: None,
                 bullets,
-            } => self.render_unordered_list(settings, bullets, depth),
+            } => self.render_unordered_list(settings, bullets, depth, code_cursor),
             markdown::Item::List {
                 start: Some(start),
                 bullets,
-            } => self.render_ordered_list(settings, *start, bullets, depth),
-            markdown::Item::Quote(contents) => self.render_quote(settings, contents, depth),
+            } => self.render_ordered_list(settings, *start, bullets, depth, code_cursor),
+            markdown::Item::Quote(contents) => self.render_quote(settings, contents, depth, code_cursor),
             markdown::Item::Rule => self.render_rule(),
             markdown::Item::Table { columns, rows } => self.render_table(settings, columns, rows),
         }
@@ -1035,26 +1134,25 @@ impl GeminiMarkdownViewer {
         let citation_color = mix_color(self.palette.text_secondary, self.palette.accent, 0.28);
         let citation_size = Pixels((base_size - 0.8).max(12.0));
 
-        let raw_spans: Vec<_> = text_item.spans(style).iter().cloned().collect();
-        let mut out = Vec::with_capacity(raw_spans.len());
-
-        for (i, mut sp) in raw_spans.iter().cloned().enumerate() {
-            if sp.highlight.is_some() {
-                sp.size = Some(inline_code_size);
-            } else if sp.link.is_some() && !is_heading && is_parenthesized_citation_span(&raw_spans, i)
+        let mut spans: Vec<_> = text_item.spans(style).to_vec();
+        for i in 0..spans.len() {
+            if spans[i].highlight.is_some() {
+                spans[i].size = Some(inline_code_size);
+            } else if spans[i].link.is_some()
+                && !is_heading
+                && is_parenthesized_citation_span(&spans, i)
             {
-                sp.color = Some(citation_color);
-                sp.size = Some(citation_size);
+                spans[i].color = Some(citation_color);
+                spans[i].size = Some(citation_size);
             } else if !is_heading
-                && sp.link.is_none()
-                && sp.color.is_none()
-                && sp.font.is_some_and(|f| f.weight == Weight::Bold)
+                && spans[i].link.is_none()
+                && spans[i].color.is_none()
+                && spans[i].font.is_some_and(|f| f.weight == Weight::Bold)
             {
-                sp.color = Some(strong_color);
+                spans[i].color = Some(strong_color);
             }
-            out.push(sp);
         }
-        out
+        spans
     }
 
     fn render_paragraph<'a>(
@@ -1135,7 +1233,11 @@ impl GeminiMarkdownViewer {
         settings: markdown::Settings,
         bullets: &'a [markdown::Bullet],
         depth: usize,
-    ) -> Element<'a, Message> {
+        code_cursor: &mut usize,
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
         let first_line_h = settings.text_size.0 * BODY_LINE_HEIGHT;
         let marker_color = if depth == 0 {
             self.palette.text_primary
@@ -1154,79 +1256,82 @@ impl GeminiMarkdownViewer {
             ..settings
         };
 
-        let rows = bullets.iter().map(|bullet| {
-            let (marker, bullet_items): (Element<'a, Message>, &'a [markdown::Item]) = match bullet
-            {
-                markdown::Bullet::Point { items } => {
-                    let dot: Element<'a, Message> = match depth {
-                        0 => container(space::horizontal())
-                            .width(Length::Fixed(5.5))
-                            .height(Length::Fixed(5.5))
-                            .style(move |_| container::Style {
-                                background: Some(Background::Color(marker_color)),
-                                border: Border {
-                                    radius: 3.0.into(),
-                                    ..Border::default()
-                                },
-                                ..container::Style::default()
-                            })
-                            .into(),
-                        1 => container(space::horizontal())
-                            .width(Length::Fixed(6.0))
-                            .height(Length::Fixed(6.0))
-                            .style(move |_| container::Style {
-                                background: None,
-                                border: Border {
-                                    radius: 3.0.into(),
-                                    width: 1.3,
-                                    color: marker_color,
-                                },
-                                ..container::Style::default()
-                            })
-                            .into(),
-                        _ => container(space::horizontal())
-                            .width(Length::Fixed(4.5))
-                            .height(Length::Fixed(4.5))
-                            .style(move |_| container::Style {
-                                background: Some(Background::Color(marker_color)),
-                                border: Border {
-                                    radius: 1.0.into(),
-                                    ..Border::default()
-                                },
-                                ..container::Style::default()
-                            })
-                            .into(),
+        let rows: Vec<Element<'a, Message>> = bullets
+            .iter()
+            .map(|bullet| {
+                let (marker, bullet_items): (Element<'a, Message>, &'a [markdown::Item]) =
+                    match bullet {
+                        markdown::Bullet::Point { items } => {
+                            let dot: Element<'a, Message> = match depth {
+                                0 => container(space::horizontal())
+                                    .width(Length::Fixed(5.5))
+                                    .height(Length::Fixed(5.5))
+                                    .style(move |_| container::Style {
+                                        background: Some(Background::Color(marker_color)),
+                                        border: Border {
+                                            radius: 3.0.into(),
+                                            ..Border::default()
+                                        },
+                                        ..container::Style::default()
+                                    })
+                                    .into(),
+                                1 => container(space::horizontal())
+                                    .width(Length::Fixed(6.0))
+                                    .height(Length::Fixed(6.0))
+                                    .style(move |_| container::Style {
+                                        background: None,
+                                        border: Border {
+                                            radius: 3.0.into(),
+                                            width: 1.3,
+                                            color: marker_color,
+                                        },
+                                        ..container::Style::default()
+                                    })
+                                    .into(),
+                                _ => container(space::horizontal())
+                                    .width(Length::Fixed(4.5))
+                                    .height(Length::Fixed(4.5))
+                                    .style(move |_| container::Style {
+                                        background: Some(Background::Color(marker_color)),
+                                        border: Border {
+                                            radius: 1.0.into(),
+                                            ..Border::default()
+                                        },
+                                        ..container::Style::default()
+                                    })
+                                    .into(),
+                            };
+
+                            let marker_slot = container(dot)
+                                .width(Length::Fixed(16.0))
+                                .height(Length::Fixed(first_line_h))
+                                .center_x(Length::Fixed(16.0))
+                                .center_y(Length::Fixed(first_line_h))
+                                .into();
+                            (marker_slot, items.as_slice())
+                        }
+                        markdown::Bullet::Task { items, done } => {
+                            let cb = container(checkbox(*done).size(settings.text_size))
+                                .width(Length::Fixed(18.0))
+                                .height(Length::Fixed(first_line_h))
+                                .center_y(Length::Fixed(first_line_h))
+                                .into();
+                            (cb, items.as_slice())
+                        }
                     };
 
-                    let marker_slot = container(dot)
-                        .width(Length::Fixed(16.0))
-                        .height(Length::Fixed(first_line_h))
-                        .center_x(Length::Fixed(16.0))
-                        .center_y(Length::Fixed(first_line_h))
-                        .into();
-                    (marker_slot, items.as_slice())
-                }
-                markdown::Bullet::Task { items, done } => {
-                    let cb = container(checkbox(*done).size(settings.text_size))
-                        .width(Length::Fixed(18.0))
-                        .height(Length::Fixed(first_line_h))
-                        .center_y(Length::Fixed(first_line_h))
-                        .into();
-                    (cb, items.as_slice())
-                }
-            };
+                let body = self.render_items(child_settings, bullet_items, depth + 1, code_cursor);
+                let r = row![marker, body]
+                    .spacing(8.0)
+                    .align_y(Alignment::Start);
 
-            let body = self.render_items(child_settings, bullet_items, depth + 1);
-            let r = row![marker, body]
-                .spacing(8.0)
-                .align_y(Alignment::Start);
-
-            if self.in_table {
-                r.into()
-            } else {
-                r.width(Fill).into()
-            }
-        });
+                if self.in_table {
+                    r.into()
+                } else {
+                    r.width(Fill).into()
+                }
+            })
+            .collect();
 
         let pad = if depth == 0 {
             Padding {
@@ -1258,7 +1363,11 @@ impl GeminiMarkdownViewer {
         start: u64,
         bullets: &'a [markdown::Bullet],
         depth: usize,
-    ) -> Element<'a, Message> {
+        code_cursor: &mut usize,
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
         let max_num = start.saturating_add(bullets.len() as u64).max(1);
         let digits = ((max_num as f32).log10().floor() as usize) + 1;
         let num_width = match digits {
@@ -1275,31 +1384,35 @@ impl GeminiMarkdownViewer {
         };
         let num_color = self.palette.text_secondary;
 
-        let rows = bullets.iter().enumerate().map(|(i, bullet)| {
-            let bullet_items = match bullet {
-                markdown::Bullet::Point { items } | markdown::Bullet::Task { items, .. } => {
-                    items.as_slice()
+        let rows: Vec<Element<'a, Message>> = bullets
+            .iter()
+            .enumerate()
+            .map(|(i, bullet)| {
+                let bullet_items = match bullet {
+                    markdown::Bullet::Point { items } | markdown::Bullet::Task { items, .. } => {
+                        items.as_slice()
+                    }
+                };
+                let number = text(format!("{}.", start + i as u64))
+                    .size(settings.text_size)
+                    .line_height(text::LineHeight::Relative(BODY_LINE_HEIGHT))
+                    .font(font_medium())
+                    .color(num_color)
+                    .align_x(alignment::Horizontal::Right)
+                    .width(Length::Fixed(num_width));
+
+                let body = self.render_items(child_settings, bullet_items, depth + 1, code_cursor);
+                let r = row![number, body]
+                    .spacing(8.0)
+                    .align_y(Alignment::Start);
+
+                if self.in_table {
+                    r.into()
+                } else {
+                    r.width(Fill).into()
                 }
-            };
-            let number = text(format!("{}.", start + i as u64))
-                .size(settings.text_size)
-                .line_height(text::LineHeight::Relative(BODY_LINE_HEIGHT))
-                .font(font_medium())
-                .color(num_color)
-                .align_x(alignment::Horizontal::Right)
-                .width(Length::Fixed(num_width));
-
-            let body = self.render_items(child_settings, bullet_items, depth + 1);
-            let r = row![number, body]
-                .spacing(8.0)
-                .align_y(Alignment::Start);
-
-            if self.in_table {
-                r.into()
-            } else {
-                r.width(Fill).into()
-            }
-        });
+            })
+            .collect();
 
         let pad = Padding {
             top: if depth == 0 { 2.0 } else { 4.0 },
@@ -1322,12 +1435,17 @@ impl GeminiMarkdownViewer {
         language: Option<&'a str>,
         code: &'a str,
         lines: &'a [markdown::Text],
+        code_idx: usize,
     ) -> Element<'a, Message> {
-        let pal = self.palette.clone();
+        let bg_code_header = self.palette.bg_code_header;
         let lang_label = language
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("code");
-        let code_owned = code.to_string();
+        let copy_msg = if self.in_table {
+            Message::CopyText(code.to_string())
+        } else {
+            Message::CopyMarkdownCode(self.copy_target, self.block_idx, code_idx)
+        };
         let text_code = self.palette.text_code;
         let fg_code_header = Color::from_rgb(0.84, 0.88, 0.94);
 
@@ -1346,7 +1464,7 @@ impl GeminiMarkdownViewer {
                     .spacing(5)
                     .align_y(Alignment::Center),
                 )
-                .on_press(Message::CopyText(code_owned))
+                .on_press(copy_msg)
                 .padding([4, 10])
                 .style(move |_, status| {
                     let hovered = matches!(status, button::Status::Hovered);
@@ -1370,7 +1488,7 @@ impl GeminiMarkdownViewer {
         .padding([7, 14])
         .width(Fill)
         .style(move |_| container::Style {
-            background: Some(Background::Color(pal.bg_code_header)),
+            background: Some(Background::Color(bg_code_header)),
             border: Border {
                 radius: iced::border::Radius {
                     top_left: 12.0,
@@ -1436,7 +1554,11 @@ impl GeminiMarkdownViewer {
         settings: markdown::Settings,
         contents: &'a [markdown::Item],
         depth: usize,
-    ) -> Element<'a, Message> {
+        code_cursor: &mut usize,
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
         let bar_color = self.palette.accent;
         let bg_color = self.palette.bg_thought;
         let quote_settings = markdown::Settings {
@@ -1444,7 +1566,7 @@ impl GeminiMarkdownViewer {
             ..settings
         };
 
-        let inner = self.render_items(quote_settings, contents, depth);
+        let inner = self.render_items(quote_settings, contents, depth, code_cursor);
         let row_view = row![
             container(space::vertical().height(Fill))
                 .width(Length::Fixed(3.0))
@@ -1502,10 +1624,13 @@ impl GeminiMarkdownViewer {
         &self,
         settings: markdown::Settings,
         tbl: &'a ParsedTable,
-    ) -> Element<'a, Message> {
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
         let cell_viewer = Self {
             in_table: true,
-            ..self.clone()
+            ..*self
         };
         let cell_settings = markdown::Settings {
             text_size: 13.5.into(),
@@ -1571,16 +1696,20 @@ impl GeminiMarkdownViewer {
                                         .on_link_click(Message::LinkClicked)
                                         .into()
                                 }
-                                other => cell_viewer.render_item(st, other, 0, 0),
+                                other => {
+                                    let mut dummy_code_cursor = 0usize;
+                                    cell_viewer.render_item(st, other, 0, 0, &mut dummy_code_cursor)
+                                }
                             })
                             .collect();
                         column(header_blocks).spacing(4).width(Fill).into()
                     } else {
                         let aligned_viewer = Self {
                             table_align: Some(align_x),
-                            ..cell_viewer.clone()
+                            ..cell_viewer
                         };
-                        aligned_viewer.render_items(st, items, 0)
+                        let mut dummy_code_cursor = 0usize;
+                        aligned_viewer.render_items(st, items, 0, &mut dummy_code_cursor)
                     }
                 })
                 .collect();
@@ -1665,8 +1794,9 @@ impl GeminiMarkdownViewer {
             ))
             .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
 
-        // 하단 우측 복사 바
-        let raw_md = tbl.raw_markdown.clone();
+        // 하단 우측 복사 바 (프레임마다 표 원문을 클론하지 않고 블록 인덱스로 지연 복사)
+        let copy_target = self.copy_target;
+        let block_idx = self.block_idx;
         let footer = container(
             row![
                 space::horizontal(),
@@ -1680,7 +1810,7 @@ impl GeminiMarkdownViewer {
                     .spacing(5)
                     .align_y(Alignment::Center),
                 )
-                .on_press(Message::CopyText(raw_md))
+                .on_press(Message::CopyMarkdownTable(copy_target, block_idx))
                 .padding([3, 8])
                 .style(move |_, status| {
                     let hovered = matches!(status, button::Status::Hovered);
@@ -1744,10 +1874,13 @@ impl GeminiMarkdownViewer {
         settings: markdown::Settings,
         columns: &'a [markdown::Column],
         rows: &'a [markdown::Row],
-    ) -> Element<'a, Message> {
+    ) -> Element<'a, Message>
+    where
+        'p: 'a,
+    {
         let cell_viewer = Self {
             in_table: true,
-            ..self.clone()
+            ..*self
         };
         let table_settings = markdown::Settings {
             text_size: 13.5.into(),
@@ -2240,7 +2373,7 @@ impl GeminiMarkdownViewer {
     }
 }
 
-impl<'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer {
+impl<'a, 'p: 'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer<'p> {
     fn on_link_click(url: markdown::Uri) -> Message {
         Message::LinkClicked(url)
     }
@@ -2280,7 +2413,7 @@ impl<'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer {
         code: &'a str,
         lines: &'a [markdown::Text],
     ) -> Element<'a, Message> {
-        self.render_code_block(settings, language, code, lines)
+        self.render_code_block(settings, language, code, lines, 0)
     }
 
     fn unordered_list(
@@ -2288,7 +2421,8 @@ impl<'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer {
         settings: markdown::Settings,
         bullets: &'a [markdown::Bullet],
     ) -> Element<'a, Message> {
-        self.render_unordered_list(settings, bullets, 0)
+        let mut cursor = 0usize;
+        self.render_unordered_list(settings, bullets, 0, &mut cursor)
     }
 
     fn ordered_list(
@@ -2297,7 +2431,8 @@ impl<'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer {
         start: u64,
         bullets: &'a [markdown::Bullet],
     ) -> Element<'a, Message> {
-        self.render_ordered_list(settings, start, bullets, 0)
+        let mut cursor = 0usize;
+        self.render_ordered_list(settings, start, bullets, 0, &mut cursor)
     }
 
     fn quote(
@@ -2305,7 +2440,8 @@ impl<'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer {
         settings: markdown::Settings,
         contents: &'a [markdown::Item],
     ) -> Element<'a, Message> {
-        self.render_quote(settings, contents, 0)
+        let mut cursor = 0usize;
+        self.render_quote(settings, contents, 0, &mut cursor)
     }
 
     fn rule(&self, _settings: markdown::Settings) -> Element<'a, Message> {
@@ -2476,5 +2612,53 @@ mod tests {
             url: String::new(),
         };
         assert!(!is_markdown_artifact(&py));
+    }
+
+    #[test]
+    fn 다중_블록_후_끝_문단_증분_push_delta_및_지연_재파싱() {
+        let initial = "| 항목 | 값 |\n| --- | --- |\n| A | 1 |\n\n설명 시작: ";
+        let mut parsed = ParsedMarkdown::parse(initial);
+        assert_eq!(parsed.blocks.len(), 2);
+
+        // 표 뒤 일반 텍스트 청크는 전체 재파싱 없이 끝 Rich 블록에 O(delta) 증분 반영
+        let full1 = format!("{initial}안녕하세요");
+        let deferred = parsed.push_delta(false, "안녕하세요", &full1, true);
+        assert!(!deferred);
+        assert_eq!(parsed.blocks.len(), 2);
+
+        // 구조 변경 토큰(`*`)이 들어오고 defer_reparse=true면 재파싱을 지연하고 true 반환
+        let full2 = format!("{full1} **강조**");
+        let deferred2 = parsed.push_delta(false, " **강조**", &full2, true);
+        assert!(deferred2);
+
+        // defer_reparse=false면 즉시 재파싱해 정상 반영
+        let deferred3 = parsed.push_delta(false, " 끝", &format!("{full2} 끝"), false);
+        assert!(!deferred3);
+        assert_eq!(parsed.blocks.len(), 2);
+    }
+
+    #[test]
+    fn 표와_코드블록_인덱스_기반_원문_조회() {
+        let src = "머리글\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```rust\nfn a() {}\n```\n\n중간\n\n```python\nprint(1)\n```\n";
+        let parsed = ParsedMarkdown::parse(src);
+        assert_eq!(parsed.blocks.len(), 3);
+
+        let tbl_raw = parsed
+            .table_raw_markdown(1)
+            .expect("1번 블록은 표 원문을 반환해야 합니다");
+        assert!(tbl_raw.contains("| A | B |"));
+        assert!(parsed.table_raw_markdown(0).is_none());
+
+        let code0 = parsed
+            .code_block_text(2, 0)
+            .expect("2번 블록 0번째 코드 블록이 있어야 합니다");
+        assert_eq!(code0.trim(), "fn a() {}");
+
+        let code1 = parsed
+            .code_block_text(2, 1)
+            .expect("2번 블록 1번째 코드 블록이 있어야 합니다");
+        assert_eq!(code1.trim(), "print(1)");
+
+        assert!(parsed.code_block_text(2, 2).is_none());
     }
 }

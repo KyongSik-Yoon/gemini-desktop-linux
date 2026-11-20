@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sam/gemini-remote-linux/internal/proto"
 )
@@ -212,10 +211,6 @@ func (c *Client) FetchRemoteImageBytes(ctx context.Context, rawURL string) ([]by
 		return nil, "", fmt.Errorf("허용되지 않는 이미지 호스트입니다: %s", parsed.Hostname())
 	}
 
-	httpCli := &http.Client{
-		Timeout:       12 * time.Second,
-		CheckRedirect: checkGoogleImageRedirect,
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, "", err
@@ -223,7 +218,7 @@ func (c *Client) FetchRemoteImageBytes(ctx context.Context, rawURL string) ([]by
 	if token, terr := c.authMgr.AccessToken(ctx); terr == nil && token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := httpCli.Do(req)
+	resp, err := c.getImageClient().Do(req)
 	if err != nil {
 		return nil, "", err
 	}

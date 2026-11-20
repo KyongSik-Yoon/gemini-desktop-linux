@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/sam/gemini-remote-linux/internal/proto"
-	"github.com/sam/gemini-remote-linux/internal/scotty"
 )
 
 const (
@@ -54,89 +53,92 @@ func (c *Client) buildChatMetadata() []byte {
 	return proto.EncodeChatRequestMetadata(locale, tz, strings.ToUpper(c.cfg.DeviceID))
 }
 
-// GetUserStatus는 현재 계정의 사용 가능한 Gemini 모델 목록과 피커 구성을 조회한다.
+// GetUserStatus는 현재 계정의 사용 가능한 Gemini 모델 목록과 피커 구성을 조회한다(60초 TTL 캐시 및 동시 호출 병합).
 func (c *Client) GetUserStatus(ctx context.Context) (*proto.UserStatusResult, error) {
-	reqBytes := proto.EncodeGetUserStatusRequest(c.buildChatMetadata())
-	respBytes, err := c.invokeUnary(ctx, PathGetUserStatus, reqBytes)
-	if err != nil {
-		return nil, err
-	}
-	return proto.DecodeGetUserStatusResponse(respBytes)
+	return c.userStatusCache.GetOrDo(60*time.Second, func() (*proto.UserStatusResult, error) {
+		reqBytes := proto.EncodeGetUserStatusRequest(c.buildChatMetadata())
+		respBytes, err := c.invokeUnary(ctx, PathGetUserStatus, reqBytes)
+		if err != nil {
+			return nil, err
+		}
+		return proto.DecodeGetUserStatusResponse(respBytes)
+	})
 }
 
-// GetUserProfile은 OAuth userinfo와 GetUserStatus를 결합해 프로필 이름·이메일·아바타 URL·구독 티어를 반환한다.
+// GetUserProfile은 OAuth userinfo와 GetUserStatus를 결합해 프로필 이름·이메일·아바타 URL·구독 티어를 반환한다(60초 TTL 캐시 및 동시 호출 병합).
 func (c *Client) GetUserProfile(ctx context.Context) (*UserProfile, error) {
-	token, err := c.authMgr.AccessToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	prof := &UserProfile{
-		DeviceName: c.cfg.DeviceName,
-		DeviceID:   c.cfg.DeviceID,
-	}
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		httpCli := &http.Client{Timeout: 10 * time.Second}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	return c.userProfileCache.GetOrDo(60*time.Second, func() (*UserProfile, error) {
+		token, err := c.authMgr.AccessToken(ctx)
 		if err != nil {
-			mu.Lock()
-			firstErr = err
-			mu.Unlock()
-			return
+			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := httpCli.Do(req)
-		if err != nil {
-			mu.Lock()
-			firstErr = err
-			mu.Unlock()
-			return
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			mu.Lock()
-			firstErr = fmt.Errorf("userinfo HTTP %d", resp.StatusCode)
-			mu.Unlock()
-			return
-		}
-		var ui struct {
-			Name      string `json:"name"`
-			GivenName string `json:"given_name"`
-			Email     string `json:"email"`
-			Picture   string `json:"picture"`
-		}
-		if json.Unmarshal(body, &ui) == nil {
-			mu.Lock()
-			prof.Name = ui.Name
-			prof.GivenName = ui.GivenName
-			prof.Email = ui.Email
-			prof.Picture = ui.Picture
-			mu.Unlock()
-		}
-	}()
 
-	go func() {
-		defer wg.Done()
-		if st, err := c.GetUserStatus(ctx); err == nil && st != nil {
-			mu.Lock()
-			prof.Tier = st.Tier
-			mu.Unlock()
+		prof := &UserProfile{
+			DeviceName: c.cfg.DeviceName,
+			DeviceID:   c.cfg.DeviceID,
 		}
-	}()
 
-	wg.Wait()
-	if prof.Name == "" && prof.Email == "" && firstErr != nil {
-		return nil, firstErr
-	}
-	return prof, nil
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var firstErr error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+			if err != nil {
+				mu.Lock()
+				firstErr = err
+				mu.Unlock()
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := c.getHTTPClient().Do(req)
+			if err != nil {
+				mu.Lock()
+				firstErr = err
+				mu.Unlock()
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				mu.Lock()
+				firstErr = fmt.Errorf("userinfo HTTP %d", resp.StatusCode)
+				mu.Unlock()
+				return
+			}
+			var ui struct {
+				Name      string `json:"name"`
+				GivenName string `json:"given_name"`
+				Email     string `json:"email"`
+				Picture   string `json:"picture"`
+			}
+			if json.Unmarshal(body, &ui) == nil {
+				mu.Lock()
+				prof.Name = ui.Name
+				prof.GivenName = ui.GivenName
+				prof.Email = ui.Email
+				prof.Picture = ui.Picture
+				mu.Unlock()
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			if st, err := c.GetUserStatus(ctx); err == nil && st != nil {
+				mu.Lock()
+				prof.Tier = st.Tier
+				mu.Unlock()
+			}
+		}()
+
+		wg.Wait()
+		if prof.Name == "" && prof.Email == "" && firstErr != nil {
+			return nil, firstErr
+		}
+		return prof, nil
+	})
 }
 
 // FetchAvatarBytes는 허용된 Google 이미지 호스트에서 프로필 사진 바이트와 Content-Type을 안전하게 다운로드한다.
@@ -148,15 +150,11 @@ func (c *Client) FetchAvatarBytes(ctx context.Context, pictureURL string) ([]byt
 	if !isAllowedGoogleImageHost(parsed.Hostname()) {
 		return nil, "", fmt.Errorf("허용되지 않는 아바타 호스트입니다: %s", parsed.Hostname())
 	}
-	httpCli := &http.Client{
-		Timeout:       10 * time.Second,
-		CheckRedirect: checkGoogleImageRedirect,
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, "", err
 	}
-	resp, err := httpCli.Do(req)
+	resp, err := c.getImageClient().Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -364,8 +362,9 @@ func (c *Client) StreamQuery(ctx context.Context, params proto.ChatQueryParams, 
 	}
 
 	if len(params.FilePaths) > 0 {
-		uploader := scotty.NewUploader()
+		uploader := c.getUploader()
 		const maxAttachSize = 20 << 20 // 20MB
+		validPaths := make([]string, 0, len(params.FilePaths))
 		for _, fp := range params.FilePaths {
 			fp = strings.TrimSpace(fp)
 			if fp == "" {
@@ -381,21 +380,62 @@ func (c *Client) StreamQuery(ctx context.Context, params proto.ChatQueryParams, 
 			if info.Size() > maxAttachSize {
 				return nil, fmt.Errorf("첨부 파일이 20MB를 초과합니다: %s", filepath.Base(fp))
 			}
-			data, readErr := os.ReadFile(fp)
-			if readErr != nil {
-				return nil, fmt.Errorf("첨부 파일 읽기 실패 (%s): %w", fp, readErr)
+			validPaths = append(validPaths, fp)
+		}
+		if len(validPaths) > 0 {
+			uploaded := make([]proto.ChatAttachment, len(validPaths))
+			upCtx, cancelUp := context.WithCancel(ctx)
+			defer cancelUp()
+
+			sem := make(chan struct{}, 4)
+			var wg sync.WaitGroup
+			var errMu sync.Mutex
+			var firstUpErr error
+
+			for idx, fp := range validPaths {
+				wg.Add(1)
+				go func(i int, path string) {
+					defer wg.Done()
+					select {
+					case sem <- struct{}{}:
+						defer func() { <-sem }()
+					case <-upCtx.Done():
+						return
+					}
+					data, readErr := os.ReadFile(path)
+					if readErr != nil {
+						errMu.Lock()
+						if firstUpErr == nil {
+							firstUpErr = fmt.Errorf("첨부 파일 읽기 실패 (%s): %w", path, readErr)
+							cancelUp()
+						}
+						errMu.Unlock()
+						return
+					}
+					blob, upErr := uploader.Upload(upCtx, token, filepath.Base(path), "", data, 1)
+					if upErr != nil {
+						errMu.Lock()
+						if firstUpErr == nil {
+							firstUpErr = fmt.Errorf("첨부 파일 업로드 실패 (%s): %w", filepath.Base(path), upErr)
+							cancelUp()
+						}
+						errMu.Unlock()
+						return
+					}
+					uploaded[i] = proto.ChatAttachment{
+						BlobID:     blob.BlobID,
+						FileType:   blob.FileType,
+						MimeType:   blob.MimeType,
+						FileSource: blob.FileSource,
+						Name:       blob.Name,
+					}
+				}(idx, fp)
 			}
-			blob, upErr := uploader.Upload(ctx, token, filepath.Base(fp), "", data, 1)
-			if upErr != nil {
-				return nil, fmt.Errorf("첨부 파일 업로드 실패 (%s): %w", filepath.Base(fp), upErr)
+			wg.Wait()
+			if firstUpErr != nil {
+				return nil, firstUpErr
 			}
-			params.Attachments = append(params.Attachments, proto.ChatAttachment{
-				BlobID:     blob.BlobID,
-				FileType:   blob.FileType,
-				MimeType:   blob.MimeType,
-				FileSource: blob.FileSource,
-				Name:       blob.Name,
-			})
+			params.Attachments = append(params.Attachments, uploaded...)
 		}
 	}
 

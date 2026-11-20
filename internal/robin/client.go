@@ -23,6 +23,7 @@ import (
 	"github.com/sam/gemini-remote-linux/internal/config"
 	"github.com/sam/gemini-remote-linux/internal/mcp"
 	"github.com/sam/gemini-remote-linux/internal/proto"
+	"github.com/sam/gemini-remote-linux/internal/scotty"
 	"github.com/sam/gemini-remote-linux/internal/tools"
 )
 
@@ -37,14 +38,76 @@ const (
 	PathPresence      = "/assistant.mobile.robin.RobinService/ReportClientPresence"
 )
 
+// ttlCallCache는 단일 값에 대한 짧은 TTL 캐시와 동시 호출(in-flight) 병합을 제공한다.
+type ttlCallCache[T any] struct {
+	mu       sync.Mutex
+	val      T
+	hasVal   bool
+	cachedAt time.Time
+	inFlight *ttlFlight[T]
+}
+
+type ttlFlight[T any] struct {
+	done chan struct{}
+	val  T
+	err  error
+}
+
+func (tc *ttlCallCache[T]) GetOrDo(ttl time.Duration, fn func() (T, error)) (T, error) {
+	tc.mu.Lock()
+	if tc.hasVal && time.Since(tc.cachedAt) < ttl {
+		v := tc.val
+		tc.mu.Unlock()
+		return v, nil
+	}
+	if fl := tc.inFlight; fl != nil {
+		tc.mu.Unlock()
+		<-fl.done
+		return fl.val, fl.err
+	}
+	fl := &ttlFlight[T]{done: make(chan struct{})}
+	tc.inFlight = fl
+	tc.mu.Unlock()
+
+	val, err := fn()
+
+	tc.mu.Lock()
+	if err == nil {
+		tc.val = val
+		tc.hasVal = true
+		tc.cachedAt = time.Now()
+	}
+	fl.val = val
+	fl.err = err
+	tc.inFlight = nil
+	tc.mu.Unlock()
+	close(fl.done)
+
+	return val, err
+}
+
+func (tc *ttlCallCache[T]) Invalidate() {
+	tc.mu.Lock()
+	tc.hasVal = false
+	tc.cachedAt = time.Time{}
+	tc.mu.Unlock()
+}
+
 // Client는 robinfrontend-pa.googleapis.com gRPC/HTTP2 클라이언트다.
 type Client struct {
-	cfg       *config.Config
-	authMgr   *auth.Manager
-	executor  *tools.Executor
-	mcpReg    *mcp.Registry
-	h2Client  *http.Client
-	sessionID string
+	cfg         *config.Config
+	authMgr     *auth.Manager
+	executor    *tools.Executor
+	mcpReg      *mcp.Registry
+	h2Client    *http.Client
+	httpClient  *http.Client
+	imageClient *http.Client
+	uploader    *scotty.Uploader
+	sessionID   string
+
+	userStatusCache  ttlCallCache[*proto.UserStatusResult]
+	userProfileCache ttlCallCache[*UserProfile]
+	devicesCache     ttlCallCache[[]proto.RegisteredDeviceSummary]
 }
 
 func NewClient(cfg *config.Config, authMgr *auth.Manager, executor *tools.Executor, mcpReg *mcp.Registry) *Client {
@@ -61,14 +124,53 @@ func NewClient(cfg *config.Config, authMgr *auth.Manager, executor *tools.Execut
 		ReadIdleTimeout: 30 * time.Second,
 		PingTimeout:     15 * time.Second,
 	}
+	sharedHTTPTransport := &http.Transport{
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     90 * time.Second,
+	}
 	return &Client{
-		cfg:       cfg,
-		authMgr:   authMgr,
-		executor:  executor,
-		mcpReg:    mcpReg,
-		h2Client:  &http.Client{Transport: tr},
+		cfg:      cfg,
+		authMgr:  authMgr,
+		executor: executor,
+		mcpReg:   mcpReg,
+		h2Client: &http.Client{Transport: tr},
+		httpClient: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: sharedHTTPTransport,
+		},
+		imageClient: &http.Client{
+			Timeout:       12 * time.Second,
+			Transport:     sharedHTTPTransport,
+			CheckRedirect: checkGoogleImageRedirect,
+		},
+		uploader:  scotty.NewUploader(),
 		sessionID: newUUID(),
 	}
+}
+
+func (c *Client) getHTTPClient() *http.Client {
+	if c.httpClient != nil {
+		return c.httpClient
+	}
+	return &http.Client{Timeout: 10 * time.Second}
+}
+
+func (c *Client) getImageClient() *http.Client {
+	if c.imageClient != nil {
+		return c.imageClient
+	}
+	return &http.Client{
+		Timeout:       12 * time.Second,
+		CheckRedirect: checkGoogleImageRedirect,
+	}
+}
+
+func (c *Client) getUploader() *scotty.Uploader {
+	if c.uploader != nil {
+		return c.uploader
+	}
+	return scotty.NewUploader()
 }
 
 func newUUID() string {
@@ -235,6 +337,7 @@ func (c *Client) RegisterDevice(ctx context.Context) (*proto.RegisterDeviceResul
 	if err != nil {
 		return nil, err
 	}
+	c.devicesCache.Invalidate()
 	return proto.DecodeRegisterDeviceResponse(respBytes)
 }
 
@@ -242,17 +345,28 @@ func (c *Client) RegisterDevice(ctx context.Context) (*proto.RegisterDeviceResul
 func (c *Client) UnregisterDevice(ctx context.Context) error {
 	reqBytes := proto.EncodeUnregisterDeviceRequest(c.buildMetadata(), strings.ToUpper(c.cfg.DeviceID))
 	_, err := c.invokeUnary(ctx, PathUnregister, reqBytes)
+	if err == nil {
+		c.devicesCache.Invalidate()
+	}
 	return err
 }
 
-// ListDevices는 현재 계정에 등록된 원격 데스크톱 기기 목록을 조회한다.
+// ListDevices는 현재 계정에 등록된 원격 데스크톱 기기 목록을 조회한다(15초 TTL 캐시 및 동시 호출 병합).
 func (c *Client) ListDevices(ctx context.Context) ([]proto.RegisteredDeviceSummary, error) {
-	reqBytes := proto.EncodeListDevicesRequest(c.buildMetadata())
-	respBytes, err := c.invokeUnary(ctx, PathListDevices, reqBytes)
+	devs, err := c.devicesCache.GetOrDo(15*time.Second, func() ([]proto.RegisteredDeviceSummary, error) {
+		reqBytes := proto.EncodeListDevicesRequest(c.buildMetadata())
+		respBytes, err := c.invokeUnary(ctx, PathListDevices, reqBytes)
+		if err != nil {
+			return nil, err
+		}
+		return proto.DecodeListDevicesResponse(respBytes)
+	})
 	if err != nil {
 		return nil, err
 	}
-	return proto.DecodeListDevicesResponse(respBytes)
+	out := make([]proto.RegisteredDeviceSummary, len(devs))
+	copy(out, devs)
+	return out, nil
 }
 
 // ReportClientPresence는 기기의 온라인 활성 상태를 보고한다.

@@ -1,5 +1,6 @@
 use iced::widget::svg;
 use iced::{Color, Length};
+use std::sync::OnceLock;
 
 /// 공식 Gemini 4색 멀티컬러 스파클(빨강·파랑·초록·노랑) 아이콘을 원본 색상 그대로 렌더링한다.
 /// resvg 호환성을 위해 clipPath/중첩 radialGradient 대신 4분면 베지어 꽃잎 path로 선명하게 구성한다.
@@ -30,14 +31,16 @@ pub fn sparkle_color<'a>(size: f32) -> svg::Svg<'a> {
   <path d="M12 12L8.75 15.25C6.95 13.55 4.5 12.3 1.6 12C4.5 11.7 6.95 10.45 8.75 8.75Z" fill="url(#p_left)"/>
 </svg>"##;
 
-    svg(svg::Handle::from_memory(RAW))
+    static HANDLE: OnceLock<svg::Handle> = OnceLock::new();
+    svg(HANDLE.get_or_init(|| svg::Handle::from_memory(RAW)).clone())
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
         .style(|_, _| svg::Style { color: None })
 }
 
 /// 공식 Gemini 앱 UI용 벡터 SVG 아이콘 세트 (24x24 Material Symbols 스타일).
-#[derive(Debug, Clone, Copy)]
+#[repr(usize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     Sparkle,
     SidebarToggle,
@@ -190,10 +193,79 @@ impl Icon {
         }
     }
 
+    const ALL: [Self; 48] = [
+        Self::Sparkle,
+        Self::SidebarToggle,
+        Self::NewChat,
+        Self::Library,
+        Self::Image,
+        Self::Clock,
+        Self::School,
+        Self::MoreHoriz,
+        Self::Notebook,
+        Self::Filter,
+        Self::Settings,
+        Self::ScreenShare,
+        Self::Mic,
+        Self::MicOff,
+        Self::Gem,
+        Self::Play,
+        Self::Laptop,
+        Self::Refresh,
+        Self::Search,
+        Self::Plus,
+        Self::ArrowUp,
+        Self::Stop,
+        Self::Copy,
+        Self::Check,
+        Self::Close,
+        Self::Edit,
+        Self::Pin,
+        Self::PinFilled,
+        Self::Trash,
+        Self::ChevronDown,
+        Self::ChevronUp,
+        Self::ChevronRight,
+        Self::TempChat,
+        Self::AttachFile,
+        Self::ThumbsUp,
+        Self::ThumbsDown,
+        Self::Share,
+        Self::MoreVert,
+        Self::Video,
+        Self::Music,
+        Self::Canvas,
+        Self::Research,
+        Self::Book,
+        Self::Tune,
+        Self::Drive,
+        Self::Unread,
+        Self::Flag,
+        Self::Progress,
+    ];
+
+    fn cached_handle(self) -> svg::Handle {
+        static HANDLES: OnceLock<[svg::Handle; 48]> = OnceLock::new();
+        let table = HANDLES.get_or_init(|| Self::ALL.map(|icon| svg::Handle::from_memory(icon.raw_svg())));
+        table[self as usize].clone()
+    }
+
     pub fn view<'a>(self, size: f32, color: Color) -> svg::Svg<'a> {
-        svg(svg::Handle::from_memory(self.raw_svg()))
+        svg(self.cached_handle())
             .width(Length::Fixed(size))
             .height(Length::Fixed(size))
             .style(move |_, _| svg::Style { color: Some(color) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 아이콘_캐시_인덱스_일치() {
+        for (idx, icon) in Icon::ALL.iter().enumerate() {
+            assert_eq!(*icon as usize, idx);
+        }
     }
 }

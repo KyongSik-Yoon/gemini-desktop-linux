@@ -2,11 +2,13 @@ use iced::futures::{Stream, StreamExt};
 use iced::stream;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-/// 로컬 Go 데몬 Unix 도메인 소켓 경로를 결정한다.
-pub fn socket_path() -> PathBuf {
+static CACHED_SOCKET_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn resolve_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR")
         && !runtime_dir.is_empty()
     {
@@ -29,6 +31,28 @@ pub fn socket_path() -> PathBuf {
             .join("daemon.sock");
     }
     PathBuf::from("/tmp/gemini-remote.sock")
+}
+
+/// 로컬 Go 데몬 Unix 도메인 소켓 경로를 결정한다(연결 성공 경로를 캐시해 반복 stat 제거).
+pub fn socket_path() -> PathBuf {
+    if let Ok(guard) = CACHED_SOCKET_PATH.lock()
+        && let Some(cached) = guard.as_ref()
+    {
+        return cached.clone();
+    }
+    resolve_socket_path()
+}
+
+fn cache_socket_path(path: &std::path::Path) {
+    if let Ok(mut guard) = CACHED_SOCKET_PATH.lock() {
+        *guard = Some(path.to_path_buf());
+    }
+}
+
+fn invalidate_socket_path() {
+    if let Ok(mut guard) = CACHED_SOCKET_PATH.lock() {
+        *guard = None;
+    }
 }
 
 #[allow(dead_code)]
@@ -682,9 +706,25 @@ async fn send_http_request(
     body: Option<&[u8]>,
 ) -> Result<(u16, bool, Option<usize>, BufReader<UnixStream>), String> {
     let sock = socket_path();
-    let mut stream = UnixStream::connect(&sock)
-        .await
-        .map_err(|e| format!("데몬 소켓 연결 실패 ({}): {e}", sock.display()))?;
+    let mut stream = match UnixStream::connect(&sock).await {
+        Ok(s) => {
+            cache_socket_path(&sock);
+            s
+        }
+        Err(first_err) => {
+            invalidate_socket_path();
+            let fresh = resolve_socket_path();
+            if fresh != sock {
+                let s = UnixStream::connect(&fresh)
+                    .await
+                    .map_err(|e| format!("데몬 소켓 연결 실패 ({}): {e}", fresh.display()))?;
+                cache_socket_path(&fresh);
+                s
+            } else {
+                return Err(format!("데몬 소켓 연결 실패 ({}): {first_err}", sock.display()));
+            }
+        }
+    };
 
     let payload = body.unwrap_or(&[]);
     let mut req = format!(
@@ -1071,18 +1111,40 @@ pub async fn abort_generation(conv_id: String, req_id: String) -> Result<(), Str
     Ok(())
 }
 
-/// 바이트 버퍼에서 `\n` 단위로 완성된 한 줄을 꺼내 UTF-8 문자열로 디코딩한다.
-/// 청크 경계에서 멀티바이트 UTF-8 문자가 분할되어도 깨지지 않도록 바이트 단위로 누적한 뒤 디코딩한다.
-fn take_next_utf8_line(pending: &mut Vec<u8>) -> Option<String> {
-    let nl = pending.iter().position(|&b| b == b'\n')?;
-    let mut raw: Vec<u8> = pending.drain(..=nl).collect();
-    if raw.last() == Some(&b'\n') {
-        raw.pop();
+/// 커서 기반 바이트 버퍼로 매 줄 `drain`에 의한 반복 `memmove`를 피하면서 `\n` 단위로 UTF-8 줄을 추출한다.
+#[derive(Default)]
+struct LineBuffer {
+    buf: Vec<u8>,
+    offset: usize,
+}
+
+impl LineBuffer {
+    fn extend_from_slice(&mut self, data: &[u8]) {
+        if self.offset > 0 && self.offset == self.buf.len() {
+            self.buf.clear();
+            self.offset = 0;
+        } else if self.offset >= 4096 && self.offset * 2 >= self.buf.len() {
+            self.buf.drain(..self.offset);
+            self.offset = 0;
+        }
+        self.buf.extend_from_slice(data);
     }
-    if raw.last() == Some(&b'\r') {
-        raw.pop();
+
+    fn take_next_utf8_line(&mut self) -> Option<String> {
+        let slice = &self.buf[self.offset..];
+        let rel_nl = slice.iter().position(|&b| b == b'\n')?;
+        let mut line_bytes = &slice[..rel_nl];
+        if line_bytes.last() == Some(&b'\r') {
+            line_bytes = &line_bytes[..line_bytes.len() - 1];
+        }
+        let s = String::from_utf8_lossy(line_bytes).into_owned();
+        self.offset += rel_nl + 1;
+        if self.offset == self.buf.len() {
+            self.buf.clear();
+            self.offset = 0;
+        }
+        Some(s)
     }
-    Some(String::from_utf8_lossy(&raw).into_owned())
 }
 
 /// Chunked 또는 Plain HTTP 바디에서 SSE 이벤트를 실시간 스트리밍으로 방출한다.
@@ -1115,7 +1177,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
             return;
         }
 
-        let mut pending: Vec<u8> = Vec::new();
+        let mut pending = LineBuffer::default();
         let mut cur_event = String::new();
         let mut cur_data = String::new();
 
@@ -1167,7 +1229,7 @@ pub fn stream_chat(req: ChatStreamRequest) -> impl Stream<Item = StreamEvent> {
             };
 
             pending.extend_from_slice(&piece);
-            while let Some(line) = take_next_utf8_line(&mut pending) {
+            while let Some(line) = pending.take_next_utf8_line() {
                 if line.is_empty() {
                     if !cur_data.is_empty() {
                         let ev = std::mem::take(&mut cur_event);
@@ -1215,7 +1277,7 @@ pub fn stream_remote_events() -> impl Stream<Item = RemoteEvent> {
                     send_http_request("GET", "/v1/remote/events", None).await
                     && status < 400
                 {
-                    let mut pending: Vec<u8> = Vec::new();
+                    let mut pending = LineBuffer::default();
                     let mut cur_event = String::new();
                     let mut cur_data = String::new();
 
@@ -1250,7 +1312,7 @@ pub fn stream_remote_events() -> impl Stream<Item = RemoteEvent> {
                         };
 
                         pending.extend_from_slice(&piece);
-                        while let Some(line) = take_next_utf8_line(&mut pending) {
+                        while let Some(line) = pending.take_next_utf8_line() {
                             if line.is_empty() {
                                 if !cur_data.is_empty() {
                                     let ev = std::mem::take(&mut cur_event);
@@ -1305,14 +1367,14 @@ mod tests {
         let raw = "data: {\"text\":\"한글 스트리밍\"}\r\n\r\n".as_bytes();
         // '한'(3바이트) 중간을 쪼개어 두 청크로 전달해도 손상 없이 복원되어야 한다.
         let split_at = 17;
-        let mut pending = Vec::new();
+        let mut pending = LineBuffer::default();
         pending.extend_from_slice(&raw[..split_at]);
-        assert!(take_next_utf8_line(&mut pending).is_none());
+        assert!(pending.take_next_utf8_line().is_none());
 
         pending.extend_from_slice(&raw[split_at..]);
-        let line1 = take_next_utf8_line(&mut pending).expect("첫 줄이 추출되어야 함");
+        let line1 = pending.take_next_utf8_line().expect("첫 줄이 추출되어야 함");
         assert_eq!(line1, "data: {\"text\":\"한글 스트리밍\"}");
-        let line2 = take_next_utf8_line(&mut pending).expect("빈 구분 줄이 추출되어야 함");
+        let line2 = pending.take_next_utf8_line().expect("빈 구분 줄이 추출되어야 함");
         assert_eq!(line2, "");
     }
 }

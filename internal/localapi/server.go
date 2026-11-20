@@ -32,10 +32,15 @@ type Server struct {
 	avatarBytes []byte
 	avatarType  string
 	avatarURL   string
+	avatarSF    singleflightGroup[cachedImage]
+
+	imgCache *imageCache
+	imgSF    singleflightGroup[cachedImage]
 
 	mediaMu      sync.Mutex
 	mediaCache   []proto.AppArtifact
 	mediaCacheAt time.Time
+	mediaSF      singleflightGroup[[]proto.AppArtifact]
 }
 
 func NewServer(cfg *config.Config, robinCli *robin.Client, sockPath string) *Server {
@@ -44,6 +49,7 @@ func NewServer(cfg *config.Config, robinCli *robin.Client, sockPath string) *Ser
 		robinCli: robinCli,
 		sockPath: sockPath,
 		store:    newWorkspaceStore(),
+		imgCache: newImageCache(64<<20, 128, 10*time.Minute),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -156,23 +162,35 @@ func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {
 	s.avatarMu.Unlock()
 
 	if len(cached) == 0 {
-		prof, err := s.robinCli.GetUserProfile(r.Context())
-		if err != nil || prof.Picture == "" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		data, contentType, err := s.robinCli.FetchAvatarBytes(r.Context(), prof.Picture)
+		img, err := s.avatarSF.Do("avatar", func() (cachedImage, error) {
+			prof, err := s.robinCli.GetUserProfile(r.Context())
+			if err != nil {
+				return cachedImage{}, err
+			}
+			if prof.Picture == "" {
+				return cachedImage{}, os.ErrNotExist
+			}
+			data, contentType, err := s.robinCli.FetchAvatarBytes(r.Context(), prof.Picture)
+			if err != nil {
+				return cachedImage{}, err
+			}
+			s.avatarMu.Lock()
+			s.avatarBytes = data
+			s.avatarType = contentType
+			s.avatarURL = prof.Picture
+			s.avatarMu.Unlock()
+			return cachedImage{data: data, contentType: contentType}, nil
+		})
 		if err != nil {
-			w.WriteHeader(http.StatusBadGateway)
+			if errors.Is(err, os.ErrNotExist) {
+				w.WriteHeader(http.StatusNotFound)
+			} else {
+				w.WriteHeader(http.StatusBadGateway)
+			}
 			return
 		}
-		s.avatarMu.Lock()
-		s.avatarBytes = data
-		s.avatarType = contentType
-		s.avatarURL = prof.Picture
-		cached = data
-		ct = contentType
-		s.avatarMu.Unlock()
+		cached = img.data
+		ct = img.contentType
 	}
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(http.StatusOK)
@@ -218,6 +236,8 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	// 첫 대화 목록 로드 시 백그라운드로 미디어 캐시를 예열해 대화 클릭 시 동기 블로킹을 줄인다.
+	s.warmMediaCacheAsync()
 	prefs := s.store.GetPreferences()
 	if len(prefs.UnreadOverrides) > 0 {
 		for i := range res.Conversations {
@@ -587,15 +607,33 @@ func (s *Server) handleProxyLibraryImage(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	data, ct, err := s.robinCli.FetchRemoteImageBytes(r.Context(), rawURL)
+	if s.imgCache != nil {
+		if data, ct, ok := s.imgCache.Get(rawURL); ok {
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("Cache-Control", "private, max-age=300")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(data)
+			return
+		}
+	}
+	img, err := s.imgSF.Do(rawURL, func() (cachedImage, error) {
+		data, ct, err := s.robinCli.FetchRemoteImageBytes(r.Context(), rawURL)
+		if err != nil {
+			return cachedImage{}, err
+		}
+		if s.imgCache != nil {
+			s.imgCache.Put(rawURL, data, ct)
+		}
+		return cachedImage{data: data, contentType: ct}, nil
+	})
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
-	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Type", img.contentType)
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	_, _ = w.Write(img.data)
 }
 
 func (s *Server) handleShareConversation(w http.ResponseWriter, r *http.Request) {
@@ -667,15 +705,33 @@ func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// invalidateMediaCache는 새 이미지·미디어가 생성되었을 때 30초 미디어 캐시를 즉시 비운다.
+// invalidateMediaCache는 새 이미지·미디어가 생성되었을 때 미디어 캐시의 신선도 타임스탬프를 즉시 무효화한다.
 func (s *Server) invalidateMediaCache() {
 	s.mediaMu.Lock()
 	s.mediaCacheAt = time.Time{}
 	s.mediaMu.Unlock()
 }
 
-// getCachedMediaArtifacts는 생성 이미지 아티팩트 목록을 짧게(30초) 캐시해
-// 일반 대화 조회 시 불필요한 추가 RPC 지연을 방지한다.
+// warmMediaCacheAsync는 미디어 캐시가 비어 있거나 TTL 만료 상태일 때 백그라운드로 비동기 갱신한다.
+func (s *Server) warmMediaCacheAsync() {
+	if s.robinCli == nil {
+		return
+	}
+	const ttl = 30 * time.Second
+	s.mediaMu.Lock()
+	fresh := !s.mediaCacheAt.IsZero() && time.Since(s.mediaCacheAt) < ttl
+	s.mediaMu.Unlock()
+	if fresh {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = s.getCachedMediaArtifacts(ctx, false)
+	}()
+}
+
+// getCachedMediaArtifacts는 생성 이미지 아티팩트 목록을 30초 TTL로 캐시하고 동시 요청을 singleflight로 병합한다.
 func (s *Server) getCachedMediaArtifacts(ctx context.Context, forceRefresh bool) []proto.AppArtifact {
 	const ttl = 30 * time.Second
 	s.mediaMu.Lock()
@@ -686,19 +742,29 @@ func (s *Server) getCachedMediaArtifacts(ctx context.Context, forceRefresh bool)
 	}
 	s.mediaMu.Unlock()
 
-	media, err := s.robinCli.ListGeminiMediaArtifacts(ctx, 80)
+	media, err := s.mediaSF.Do("media_artifacts", func() ([]proto.AppArtifact, error) {
+		fetched, err := s.robinCli.ListGeminiMediaArtifacts(ctx, 80)
+		if err != nil {
+			return nil, err
+		}
+		s.mediaMu.Lock()
+		s.mediaCache = fetched
+		s.mediaCacheAt = time.Now()
+		s.mediaMu.Unlock()
+		return fetched, nil
+	})
 	if err != nil {
-		return nil
+		s.mediaMu.Lock()
+		fallback := s.mediaCache
+		s.mediaMu.Unlock()
+		return fallback
 	}
-	s.mediaMu.Lock()
-	s.mediaCache = media
-	s.mediaCacheAt = time.Now()
-	s.mediaMu.Unlock()
 	return media
 }
 
 // enrichGeneratedImages는 서버 미디어 아티팩트의 실제 생성 이미지 URL을 해당 대화 턴에 매칭해 채운다.
-// 플레이스홀더(`image_generation_content/`)가 없는 생성 이미지 턴도 ResponseID/RequestID 정확 매칭으로 복구한다.
+// 플레이스홀더(`image_generation_content/`)가 없는 생성 이미지 턴도 ResponseID/RequestID 정확 매칭으로 복구하되,
+// 일반 텍스트 대화 클릭 시에는 stale-while-revalidate 방식으로 동기 블로킹을 피한다.
 func (s *Server) enrichGeneratedImages(ctx context.Context, convID string, turns []proto.ConversationTurn) {
 	if s.robinCli == nil || len(turns) == 0 {
 		return
@@ -711,7 +777,20 @@ func (s *Server) enrichGeneratedImages(ctx context.Context, convID string, turns
 		}
 	}
 
-	media := s.getCachedMediaArtifacts(ctx, false)
+	var media []proto.AppArtifact
+	if hasPlaceholder {
+		media = s.getCachedMediaArtifacts(ctx, false)
+	} else {
+		const ttl = 30 * time.Second
+		s.mediaMu.Lock()
+		cached := s.mediaCache
+		stale := s.mediaCacheAt.IsZero() || time.Since(s.mediaCacheAt) >= ttl
+		s.mediaMu.Unlock()
+		if stale {
+			s.warmMediaCacheAsync()
+		}
+		media = cached
+	}
 	filterConv := func(all []proto.AppArtifact) []proto.AppArtifact {
 		var out []proto.AppArtifact
 		for _, m := range all {
@@ -888,8 +967,10 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
+	var prevSentText, prevSentThoughts string
 	final, err := s.robinCli.StreamQuery(r.Context(), params, func(chunk proto.ChatStreamChunk) error {
-		return writeSSE("chunk", chunk)
+		wire := compactStreamChunk(chunk, &prevSentText, &prevSentThoughts)
+		return writeSSE("chunk", wire)
 	})
 	if err != nil {
 		_ = writeSSE("error", map[string]string{"error": err.Error()})
@@ -917,4 +998,35 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_ = writeSSE("done", final)
+}
+
+// compactStreamChunk는 순수 접두사 증가 구간에서 누적 전체 Text/Thoughts 재전송을 생략해
+// SSE 직렬화·전송 비용을 O(N²)에서 O(N)으로 낮춘다. 비접두사 교체 시에는 전체 텍스트를 유지한다.
+func compactStreamChunk(chunk proto.ChatStreamChunk, prevText, prevThoughts *string) proto.ChatStreamChunk {
+	if chunk.Type != "data" {
+		return chunk
+	}
+	if chunk.Text != "" {
+		if strings.HasPrefix(chunk.Text, *prevText) {
+			delta := chunk.Text[len(*prevText):]
+			*prevText = chunk.Text
+			chunk.Delta = delta
+			chunk.Text = ""
+		} else {
+			*prevText = chunk.Text
+			chunk.Delta = ""
+		}
+	}
+	if chunk.Thoughts != "" {
+		if strings.HasPrefix(chunk.Thoughts, *prevThoughts) {
+			delta := chunk.Thoughts[len(*prevThoughts):]
+			*prevThoughts = chunk.Thoughts
+			chunk.ThoughtsDelta = delta
+			chunk.Thoughts = ""
+		} else {
+			*prevThoughts = chunk.Thoughts
+			chunk.ThoughtsDelta = ""
+		}
+	}
+	return chunk
 }
