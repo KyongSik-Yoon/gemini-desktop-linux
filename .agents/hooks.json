@@ -1,0 +1,11 @@
+{
+  "gemini-remote-perf-guard": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "./hooks/perf-guard-hook.sh",
+        "timeout": 15
+      }
+    ]
+  }
+}
