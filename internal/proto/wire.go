@@ -83,6 +83,13 @@ func (b *Builder) AppendBoolAlways(fieldNum uint32, v bool) {
 	}
 }
 
+func (b *Builder) AppendFixed32(fieldNum uint32, v uint32) {
+	b.AppendTag(fieldNum, WireFixed32)
+	var tmp [4]byte
+	binary.LittleEndian.PutUint32(tmp[:], v)
+	b.buf = append(b.buf, tmp[:]...)
+}
+
 func (b *Builder) AppendFixed64(fieldNum uint32, v uint64) {
 	b.AppendTag(fieldNum, WireFixed64)
 	var tmp [8]byte
@@ -166,7 +173,7 @@ func ParseFields(data []byte) ([]Field, error) {
 			out = append(out, Field{Num: fieldNum, WireType: wireType, Fixed64: val})
 		case WireBytes:
 			length, ln := binary.Uvarint(data[i:])
-			if ln <= 0 || i+ln+int(length) > len(data) {
+			if ln <= 0 || length > uint64(len(data)-i-ln) {
 				return out, fmt.Errorf("잘못된 bytes 길이 (field=%d, len=%d)", fieldNum, length)
 			}
 			i += ln
@@ -403,7 +410,22 @@ func EncodeRequestMetadata(locale, timeZone, appVersion, sessionID, deviceID str
 	}
 
 	b := NewBuilder()
+	if locale != "" {
+		loc := NewBuilder()
+		loc.AppendString(1, locale)
+		b.AppendMessage(2, loc.Bytes()) // interface_locale
+	}
 	b.AppendMessage(3, logMeta.Bytes()) // logging_metadata
+	b.AppendInt32(4, ClientTypeMacOS)   // client_type = 21 (macOS)
+	b.AppendInt32(5, UISourceFullScreen)
+	if locale != "" {
+		b.AppendString(7, locale) // language_code
+	}
+	if timeZone != "" {
+		tz := NewBuilder()
+		tz.AppendString(1, timeZone)
+		b.AppendMessage(19, tz.Bytes()) // time_zone
+	}
 	return b.Bytes()
 }
 
@@ -623,8 +645,11 @@ func DecodeListDevicesResponse(data []byte) ([]RegisteredDeviceSummary, error) {
 
 // EncodeReportClientPresenceRequest는 ReportClientPresenceRequest(0x9e26340)를 인코딩한다.
 // Field 1: string focused_conversation_id, Field 2: bool is_visible, Field 3: RequestMetadata request_metadata
-func EncodeReportClientPresenceRequest(reqMeta []byte, _ string) []byte {
+func EncodeReportClientPresenceRequest(reqMeta []byte, focusedConversationID string) []byte {
 	b := NewBuilder()
+	if focusedConversationID != "" {
+		b.AppendString(1, focusedConversationID)
+	}
 	b.AppendBool(2, true) // is_visible = true
 	if len(reqMeta) > 0 {
 		b.AppendMessage(3, reqMeta)
@@ -662,6 +687,7 @@ type FunctionResponseInput struct {
 	ID          string
 	Response    map[string]any
 	Attachments []AttachmentInput
+	UIState     string
 }
 
 // EncodeRemoteToolResultRequest는 ExecuteRemoteToolsRequest(tool_result) 메시지를 인코딩한다.
@@ -685,6 +711,9 @@ func EncodeRemoteToolResultRequest(reqMeta []byte, responses []FunctionResponseI
 			uqa.AppendMessage(1, blob.Bytes())
 			uqa.AppendString(2, att.Name)
 			fr.AppendMessage(4, uqa.Bytes())
+		}
+		if r.UIState != "" {
+			fr.AppendString(5, r.UIState)
 		}
 		resBuilder.AppendMessage(1, fr.Bytes())
 	}
@@ -779,12 +808,15 @@ func DecodeExecuteRemoteToolsResponse(data []byte) (*RemoteToolServerEvent, erro
 
 // WakeUpEvent는 Punctual 채널 또는 FCM으로 수신한 원격 도구 실행 트리거 정보다.
 type WakeUpEvent struct {
-	SessionRoutingKey string
-	RoutingToken      string
-	TargetDeviceID    string
-	IsLocalExecution  bool
-	ScheduledTaskName string
-	IsClientSyncHint  bool
+	SessionRoutingKey    string
+	RoutingToken         string
+	TargetDeviceID       string
+	IsLocalExecution     bool
+	ScheduledTaskName    string
+	IsClientSyncHint     bool
+	RefreshDeviceStatus  bool
+	RefreshDeviceID      string
+	RefreshRemoteEnabled bool
 }
 
 func extractConversationKey(s string) string {
@@ -895,22 +927,20 @@ func DecodeWakeUpPayload(streamID int64, objectPath string, payload []byte) (*Wa
 				case 27: // RefreshDeviceStatus
 					if sf.WireType == WireBytes {
 						df, _ := ParseFields(sf.Bytes)
-						var devID string
-						var enabled bool
+						ev.RefreshDeviceStatus = true
 						for _, d := range df {
 							if d.Num == 1 && d.WireType == WireBytes {
-								devID = string(d.Bytes)
+								ev.RefreshDeviceID = string(d.Bytes)
 							} else if d.Num == 3 && d.WireType == WireVarint {
-								enabled = d.Varint != 0
+								ev.RefreshRemoteEnabled = d.Varint != 0
 							}
 						}
-						return nil, fmt.Errorf("ClientSync 기기 상태 갱신 수신 (device_id=%s, remote_enabled=%v)", devID, enabled)
 					}
 				}
 			}
 		}
 	}
-	if ev.SessionRoutingKey != "" {
+	if ev.SessionRoutingKey != "" || ev.RefreshDeviceStatus {
 		return ev, nil
 	}
 	if hintConvKey != "" {
@@ -1010,14 +1040,17 @@ func DecodeChooseServerResponse(data []byte) (string, error) {
 
 // EncodeMultiWatchRequestBatch는 Punctual `/punctual/multi-watch/channel` 구독 요청 배치를 생성한다.
 func EncodeMultiWatchRequestBatch(project string) []byte {
+	if strings.TrimSpace(project) == "" {
+		project = "assistant-bard"
+	}
 	streams := []struct {
 		id  int64
 		req []byte
 	}{
-		{1, buildPunctualPointWatchRequest("assistant-bard", "bard-client-sync")},
-		{2, buildPunctualPrefixWatchRequest("assistant-bard", "remote-tool-wakeup")},
-		{5, buildPunctualPrefixWatchRequest("assistant-bard", "bard-client-sync")},
-		{7, buildPunctualPointWatchRequest("assistant-bard", "remote-tool-wakeup")},
+		{1, buildPunctualPointWatchRequest(project, "bard-client-sync")},
+		{2, buildPunctualPrefixWatchRequest(project, "remote-tool-wakeup")},
+		{5, buildPunctualPrefixWatchRequest(project, "bard-client-sync")},
+		{7, buildPunctualPointWatchRequest(project, "remote-tool-wakeup")},
 	}
 
 	batch := NewBuilder()

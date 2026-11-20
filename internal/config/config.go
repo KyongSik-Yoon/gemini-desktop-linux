@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
@@ -29,14 +30,16 @@ type MCPServerConfig struct {
 
 // Config는 gemini-remote-linux 데몬의 영구 설정을 담는다.
 type Config struct {
-	DeviceID         string            `json:"device_id"`
-	DeviceName       string            `json:"device_name"`
-	OSType           string            `json:"os_type"`
-	OSVersion        string            `json:"os_version"`
-	OSBuild          string            `json:"os_build"`
-	AppVersion       string            `json:"app_version"`
-	Locale           string            `json:"locale"`
-	TimeZone         string            `json:"time_zone"`
+	mu sync.RWMutex `json:"-"`
+
+	DeviceID          string            `json:"device_id"`
+	DeviceName        string            `json:"device_name"`
+	OSType            string            `json:"os_type"`
+	OSVersion         string            `json:"os_version"`
+	OSBuild           string            `json:"os_build"`
+	AppVersion        string            `json:"app_version"`
+	Locale            string            `json:"locale"`
+	TimeZone          string            `json:"time_zone"`
 	ConnectedFolders  []string          `json:"connected_folders"`
 	MCPServers        []MCPServerConfig `json:"mcp_servers"`
 	RemoteEnabled     *bool             `json:"remote_enabled,omitempty"`
@@ -47,7 +50,12 @@ type Config struct {
 
 // IsRemoteEnabled는 원격 제어 수신이 활성화되어 있는지 반환한다(미설정 시 기본 true).
 func (c *Config) IsRemoteEnabled() bool {
-	if c == nil || c.RemoteEnabled == nil {
+	if c == nil {
+		return true
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.RemoteEnabled == nil {
 		return true
 	}
 	return *c.RemoteEnabled
@@ -55,8 +63,151 @@ func (c *Config) IsRemoteEnabled() bool {
 
 // SetRemoteEnabled는 원격 제어 수신 활성화 여부를 설정한다.
 func (c *Config) SetRemoteEnabled(enabled bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
 	v := enabled
 	c.RemoteEnabled = &v
+	c.mu.Unlock()
+}
+
+// CloneConnectedFolders는 연결된 폴더 목록의 복사본을 스레드 안전하게 반환한다.
+func (c *Config) CloneConnectedFolders() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]string(nil), c.ConnectedFolders...)
+}
+
+// FirstConnectedFolder는 첫 번째 연결 폴더를 스레드 안전하게 반환한다.
+func (c *Config) FirstConnectedFolder() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.ConnectedFolders) == 0 {
+		return ""
+	}
+	return c.ConnectedFolders[0]
+}
+
+// AddConnectedFolder는 중복을 제외하고 연결 폴더를 추가한다(추가 시 true 반환).
+func (c *Config) AddConnectedFolder(clean string) bool {
+	if c == nil || clean == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, cur := range c.ConnectedFolders {
+		if filepath.Clean(cur) == clean {
+			return false
+		}
+	}
+	c.ConnectedFolders = append(c.ConnectedFolders, clean)
+	return true
+}
+
+// RemoveConnectedFolder는 연결 폴더 목록에서 일치하는 항목을 제거한다.
+func (c *Config) RemoveConnectedFolder(clean, raw string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := make([]string, 0, len(c.ConnectedFolders))
+	removed := false
+	for _, cur := range c.ConnectedFolders {
+		if filepath.Clean(cur) == clean || cur == raw {
+			removed = true
+			continue
+		}
+		next = append(next, cur)
+	}
+	if !removed {
+		return false
+	}
+	c.ConnectedFolders = next
+	return true
+}
+
+// CloneMCPServers는 MCP 서버 설정 목록의 복사본을 스레드 안전하게 반환한다.
+func (c *Config) CloneMCPServers() []MCPServerConfig {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]MCPServerConfig, len(c.MCPServers))
+	for i, s := range c.MCPServers {
+		cp := s
+		if len(s.Args) > 0 {
+			cp.Args = append([]string(nil), s.Args...)
+		}
+		if len(s.Env) > 0 {
+			cp.Env = make(map[string]string, len(s.Env))
+			for k, v := range s.Env {
+				cp.Env[k] = v
+			}
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+// GetLocale은 설정된 로케일을 스레드 안전하게 반환한다.
+func (c *Config) GetLocale() string {
+	if c == nil {
+		return "ko-KR"
+	}
+	c.mu.RLock()
+	v := c.Locale
+	c.mu.RUnlock()
+	if strings.TrimSpace(v) == "" {
+		return "ko-KR"
+	}
+	return v
+}
+
+// GetTimeZone은 설정된 시간대를 스레드 안전하게 반환한다.
+func (c *Config) GetTimeZone() string {
+	if c == nil {
+		return "Asia/Seoul"
+	}
+	c.mu.RLock()
+	v := c.TimeZone
+	c.mu.RUnlock()
+	if strings.TrimSpace(v) == "" {
+		return "Asia/Seoul"
+	}
+	return v
+}
+
+// GetAppVersion은 설정된 앱 버전을 스레드 안전하게 반환한다.
+func (c *Config) GetAppVersion() string {
+	if c == nil {
+		return DefaultAppVersion
+	}
+	c.mu.RLock()
+	v := c.AppVersion
+	c.mu.RUnlock()
+	if strings.TrimSpace(v) == "" {
+		return DefaultAppVersion
+	}
+	return v
+}
+
+// GetObsidianVaultDir는 설정된 Obsidian 볼트 경로를 스레드 안전하게 반환한다.
+func (c *Config) GetObsidianVaultDir() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.ObsidianVaultDir
 }
 
 // ConfigDir는 ~/.config/gemini-remote 경로를 반환한다.
@@ -195,15 +346,43 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
+	c.mu.RLock()
 	data, err := json.MarshalIndent(c, "", "  ")
+	c.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	return writeFileAtomic(p, data, 0o600)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	tmp := f.Name()
+	cleanup := func() {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+	}
+	if err := f.Chmod(perm); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // CollectBootstrapFiles는 연결된 폴더 및 홈 디렉토리의 AGENTS.md / CLAUDE.md / GEMINI.md 파일을 수집한다.
@@ -224,7 +403,7 @@ func (c *Config) CollectBootstrapFiles() map[string][]byte {
 			struct{ key, path string }{"~/AGENTS.md", filepath.Join(home, "AGENTS.md")},
 		)
 	}
-	for _, folder := range c.ConnectedFolders {
+	for _, folder := range c.CloneConnectedFolders() {
 		for _, name := range []string{"AGENTS.md", "CLAUDE.md", "GEMINI.md"} {
 			full := filepath.Join(folder, name)
 			candidates = append(candidates, struct{ key, path string }{full, full})

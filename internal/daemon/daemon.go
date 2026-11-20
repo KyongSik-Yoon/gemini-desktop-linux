@@ -78,7 +78,7 @@ func New(cfg *config.Config, authMgr *auth.Manager) *Daemon {
 			fmt.Printf("[daemon] 폴더 변경 후 RegisterDevice 경고: %v\n", err)
 		} else {
 			d.markSynced()
-			fmt.Printf("[daemon] 연결 폴더 변경사항 서버 등록 완료 (%v)\n", cfg.ConnectedFolders)
+			fmt.Printf("[daemon] 연결 폴더 변경사항 서버 등록 완료 (%d개)\n", len(cfg.CloneConnectedFolders()))
 		}
 		d.notifyStatusChanged("folders_changed")
 	})
@@ -101,7 +101,7 @@ func (d *Daemon) runSession(ctx context.Context, routingKey, routingToken string
 
 // Serve는 데몬 메인 루프를 실행한다.
 func (d *Daemon) Serve(ctx context.Context) error {
-	fmt.Printf("[daemon] 리눅스 원격 제어 데몬 시작 (device_id=%s, name=%s)\n", d.cfg.DeviceID, d.cfg.DeviceName)
+	fmt.Printf("[daemon] 리눅스 원격 제어 데몬 시작 (name=%s)\n", d.cfg.DeviceName)
 
 	if d.cfg.IsRemoteEnabled() {
 		res, err := d.robinCli.RegisterDevice(ctx)
@@ -170,12 +170,29 @@ func (d *Daemon) Serve(ctx context.Context) error {
 }
 
 func (d *Daemon) handleWakeUpEvent(ctx context.Context, ev *proto.WakeUpEvent) {
-	if ev == nil || ev.SessionRoutingKey == "" {
+	if ev == nil {
 		return
 	}
-	d.cfgMu.RLock()
+	if ev.RefreshDeviceStatus {
+		if d.robinCli != nil {
+			d.robinCli.InvalidateDevicesCache()
+			go func() {
+				syncCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				_, _ = d.robinCli.ListDevices(syncCtx)
+				d.notifyStatusChanged("device_status_sync")
+			}()
+		} else {
+			d.notifyStatusChanged("device_status_sync")
+		}
+		if ev.SessionRoutingKey == "" {
+			return
+		}
+	}
+	if ev.SessionRoutingKey == "" {
+		return
+	}
 	enabled := d.cfg.IsRemoteEnabled()
-	d.cfgMu.RUnlock()
 	if !enabled {
 		return
 	}
@@ -203,11 +220,14 @@ func (d *Daemon) runSessionLoop(parentCtx, sessionCtx context.Context, routingKe
 	hooks := robin.SessionHooks{
 		OnToolCallStart: func() {
 			d.sessionMu.Lock()
+			if !entry.hadToolCall {
+				// 초기 핸드셰이크 중 보류된 동일 턴 WakeUp은 첫 도구 호출 시작으로 이미 처리되었으므로 소거한다.
+				entry.pendingWakeUp = false
+				entry.pendingToken = ""
+			}
 			entry.hadToolCall = true
 			entry.inToolCall = true
 			entry.isIdle = false
-			entry.pendingWakeUp = false
-			entry.pendingToken = ""
 			d.sessionMu.Unlock()
 		},
 		OnToolCallEnd: func() {
@@ -230,7 +250,7 @@ func (d *Daemon) runSessionLoop(parentCtx, sessionCtx context.Context, routingKe
 		err := d.runSession(sessionCtx, routingKey, currentToken, hooks)
 		d.sessionMu.Lock()
 		hadToolCall := entry.hadToolCall
-		resumePending := !hadToolCall && entry.pendingWakeUp && parentCtx.Err() == nil && sessionCtx.Err() == nil
+		resumePending := entry.pendingWakeUp && parentCtx.Err() == nil && sessionCtx.Err() == nil
 		nextToken := entry.pendingToken
 		if resumePending {
 			entry.pendingWakeUp = false
@@ -252,7 +272,7 @@ func (d *Daemon) runSessionLoop(parentCtx, sessionCtx context.Context, routingKe
 		if !resumePending {
 			return
 		}
-		fmt.Printf("[daemon] 조기 종료된 힌트 세션에 보류된 WakeUp 승계 실행 (routing_key=%s, seq=%d)\n", routingKey, entry.id)
+		fmt.Printf("[daemon] 보류된 후속 WakeUp 승계 실행 (routing_key=%s, seq=%d)\n", routingKey, entry.id)
 		currentToken = nextToken
 	}
 }
@@ -263,10 +283,18 @@ func (d *Daemon) tryStartSessionFromHint(parent context.Context, routingKey stri
 	if prev, exists := d.activeSessions[routingKey]; exists && prev != nil {
 		return nil, nil, false
 	}
-	if last, ok := d.lastHintProbe[routingKey]; ok && time.Since(last) < 3*time.Second {
+	now := time.Now()
+	if len(d.lastHintProbe) > 64 {
+		for k, ts := range d.lastHintProbe {
+			if now.Sub(ts) > time.Minute {
+				delete(d.lastHintProbe, k)
+			}
+		}
+	}
+	if last, ok := d.lastHintProbe[routingKey]; ok && now.Sub(last) < 3*time.Second {
 		return nil, nil, false
 	}
-	d.lastHintProbe[routingKey] = time.Now()
+	d.lastHintProbe[routingKey] = now
 	nextSessionSeq++
 	seq := nextSessionSeq
 	sessionCtx, cancel := context.WithCancel(parent)

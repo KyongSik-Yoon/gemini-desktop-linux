@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -181,8 +182,28 @@ func newUUID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
+func (c *Client) locale() string {
+	return c.cfg.GetLocale()
+}
+
+func (c *Client) timeZone() string {
+	return c.cfg.GetTimeZone()
+}
+
+func (c *Client) appVersion() string {
+	v := c.cfg.GetAppVersion()
+	if strings.TrimSpace(v) == "" {
+		return AppVersion
+	}
+	return v
+}
+
 func (c *Client) buildMetadata() []byte {
-	return proto.EncodeRequestMetadata("ko-KR", "Asia/Seoul", AppVersion, c.sessionID, strings.ToUpper(c.cfg.DeviceID))
+	return proto.EncodeRequestMetadata(c.locale(), c.timeZone(), c.appVersion(), c.sessionID, strings.ToUpper(c.cfg.DeviceID))
+}
+
+func isDebugWireEnabled() bool {
+	return os.Getenv("GEMINI_DEBUG_WIRE") == "1"
 }
 
 // FrameGRPC는 Protobuf 바이트 앞에 5바이트 gRPC Length-Prefixed-Message 헤더를 붙인다.
@@ -234,45 +255,67 @@ func ReadGRPCFrame(r io.Reader) ([]byte, error) {
 }
 
 // invokeUnary는 HTTP/2 gRPC Unary 호출을 수행하고 실패 시 OnePlatform HTTP/Protobuf(/$rpc/...)로 폴백한다.
+// 서버가 401 또는 gRPC UNAUTHENTICATED(16)를 반환하면 OAuth 토큰을 강제 갱신해 1회 재시도한다.
 func (c *Client) invokeUnary(ctx context.Context, rpcPath string, reqPayload []byte) ([]byte, error) {
 	token, err := c.authMgr.AccessToken(ctx)
 	if err != nil {
 		return nil, err
 	}
+	body, unauth, err := c.invokeUnaryOnce(ctx, rpcPath, reqPayload, token)
+	if err != nil && unauth {
+		if refreshed, rerr := c.authMgr.ForceRefresh(ctx); rerr == nil && refreshed != "" {
+			body, _, err = c.invokeUnaryOnce(ctx, rpcPath, reqPayload, refreshed)
+		}
+	}
+	return body, err
+}
+
+func (c *Client) invokeUnaryOnce(ctx context.Context, rpcPath string, reqPayload []byte, token string) ([]byte, bool, error) {
+	lang := c.locale()
 
 	// 1차 시도: 표준 HTTP/2 gRPC 프레이밍
 	grpcURL := "https://" + DefaultHost + rpcPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, grpcURL, bytes.NewReader(FrameGRPC(reqPayload)))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("Content-Type", "application/grpc")
 	req.Header.Set("TE", "trailers")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Ios-Bundle-Identifier", BundleID)
-	req.Header.Set("Accept-Language", "ko-KR")
+	req.Header.Set("Accept-Language", lang)
 	req.Header.Set("User-Agent", "grpc-c++/1.62.0 grpc-objc/1.62.0")
 
 	resp, err := c.h2Client.Do(req)
 	if err == nil {
-		defer resp.Body.Close()
 		ct := resp.Header.Get("Content-Type")
+		if resp.StatusCode == http.StatusUnauthorized {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			return nil, true, fmt.Errorf("gRPC 인증 오류 (HTTP 401)")
+		}
 		if resp.StatusCode == http.StatusOK && strings.HasPrefix(ct, "application/grpc") {
 			msg, rerr := ReadGRPCFrame(resp.Body)
+			// HTTP/2 트레일러를 확실히 수신하기 위해 EOF까지 잔여 바이트를 소진한다.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 			grpcStatus := resp.Trailer.Get("Grpc-Status")
 			if grpcStatus == "" {
 				grpcStatus = resp.Header.Get("Grpc-Status")
 			}
+			grpcMsg := resp.Trailer.Get("Grpc-Message")
+			if grpcMsg == "" {
+				grpcMsg = resp.Header.Get("Grpc-Message")
+			}
+			resp.Body.Close()
 			if rerr == nil && (grpcStatus == "" || grpcStatus == "0") {
-				return msg, nil
+				return msg, false, nil
 			}
 			if grpcStatus != "" && grpcStatus != "0" {
-				grpcMsg := resp.Trailer.Get("Grpc-Message")
-				if grpcMsg == "" {
-					grpcMsg = resp.Header.Get("Grpc-Message")
-				}
-				return nil, fmt.Errorf("gRPC 오류 (status=%s, msg=%s)", grpcStatus, grpcMsg)
+				return nil, grpcStatus == "16", fmt.Errorf("gRPC 오류 (status=%s, msg=%s)", grpcStatus, grpcMsg)
 			}
+		} else {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
 		}
 	}
 
@@ -280,27 +323,30 @@ func (c *Client) invokeUnary(ctx context.Context, rpcPath string, reqPayload []b
 	fallbackURL := "https://" + DefaultHost + "/$rpc" + rpcPath
 	fbReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fallbackURL, bytes.NewReader(reqPayload))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	fbReq.Header.Set("Content-Type", "application/x-protobuf")
 	fbReq.Header.Set("Accept", "application/x-protobuf")
 	fbReq.Header.Set("Authorization", "Bearer "+token)
 	fbReq.Header.Set("X-Ios-Bundle-Identifier", BundleID)
-	fbReq.Header.Set("Accept-Language", "ko-KR")
+	fbReq.Header.Set("Accept-Language", lang)
 
 	fbResp, err := c.h2Client.Do(fbReq)
 	if err != nil {
-		return nil, fmt.Errorf("gRPC 및 OnePlatform 호출 실패 (%s): %w", rpcPath, err)
+		return nil, false, fmt.Errorf("gRPC 및 OnePlatform 호출 실패 (%s): %w", rpcPath, err)
 	}
 	defer fbResp.Body.Close()
 	body, _ := io.ReadAll(fbResp.Body)
-	if fbResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("RPC %s 실패 (HTTP %d): %s", rpcPath, fbResp.StatusCode, string(body))
+	if fbResp.StatusCode == http.StatusUnauthorized {
+		return nil, true, fmt.Errorf("RPC %s 인증 실패 (HTTP 401): %s", rpcPath, string(body))
 	}
-	return body, nil
+	if fbResp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("RPC %s 실패 (HTTP %d): %s", rpcPath, fbResp.StatusCode, string(body))
+	}
+	return body, false, nil
 }
 
-// RegisterDevice는 현재 리눅스 머신과 19개 도구 스키마, 연결 폴더, 부트스트랩 파일, 내장 MCP 서버를 등록한다.
+// RegisterDevice는 현재 리눅스 머신과 도구 스키마, 연결 폴더, 부트스트랩 파일, MCP 서버를 등록한다.
 func (c *Client) RegisterDevice(ctx context.Context) (*proto.RegisterDeviceResult, error) {
 	bootstrapMap := c.cfg.CollectBootstrapFiles()
 	var protoBootstrap []proto.BootstrapFileInfo
@@ -312,33 +358,45 @@ func (c *Client) RegisterDevice(ctx context.Context) (*proto.RegisterDeviceResul
 		})
 	}
 
-	bundledMcp := []proto.BundledMcpServerInfo{
-		{
-			ServerID: "git",
-			Enabled:  true,
-		},
-		{
-			ServerID: "obsidian",
-			Enabled:  true,
-		},
+	var bundledMcp []proto.BundledMcpServerInfo
+	if c.mcpReg != nil {
+		for _, srv := range c.mcpReg.BundledServers() {
+			bundledMcp = append(bundledMcp, proto.BundledMcpServerInfo{
+				ServerID: srv.ServerID,
+				Enabled:  srv.Enabled,
+			})
+		}
+	}
+	if len(bundledMcp) == 0 {
+		for _, sc := range c.cfg.CloneMCPServers() {
+			bundledMcp = append(bundledMcp, proto.BundledMcpServerInfo{
+				ServerID: sc.ServerID,
+				Enabled:  sc.Enabled,
+			})
+		}
 	}
 
 	desktopInfo := proto.EncodeDesktopDeviceInfo(proto.DesktopDeviceParams{
 		DeviceID:         strings.ToUpper(c.cfg.DeviceID),
 		DeviceName:       c.cfg.DeviceName,
 		ToolDeclarations: c.executor.Declarations(),
-		ConnectedFolders: c.cfg.ConnectedFolders,
+		ConnectedFolders: c.cfg.CloneConnectedFolders(),
 		BootstrapFiles:   protoBootstrap,
 		BundledMcp:       bundledMcp,
 	})
 
-	reqBytes := proto.EncodeRegisterDeviceRequest(c.buildMetadata(), AppVersion, desktopInfo)
+	reqBytes := proto.EncodeRegisterDeviceRequest(c.buildMetadata(), c.appVersion(), desktopInfo)
 	respBytes, err := c.invokeUnary(ctx, PathRegister, reqBytes)
 	if err != nil {
 		return nil, err
 	}
 	c.devicesCache.Invalidate()
 	return proto.DecodeRegisterDeviceResponse(respBytes)
+}
+
+// InvalidateDevicesCache는 기기 목록 TTL 캐시를 즉시 무효화한다.
+func (c *Client) InvalidateDevicesCache() {
+	c.devicesCache.Invalidate()
 }
 
 // UnregisterDevice는 기기 등록을 해제한다.
@@ -371,7 +429,7 @@ func (c *Client) ListDevices(ctx context.Context) ([]proto.RegisteredDeviceSumma
 
 // ReportClientPresence는 기기의 온라인 활성 상태를 보고한다.
 func (c *Client) ReportClientPresence(ctx context.Context) error {
-	reqBytes := proto.EncodeReportClientPresenceRequest(c.buildMetadata(), strings.ToUpper(c.cfg.DeviceID))
+	reqBytes := proto.EncodeReportClientPresenceRequest(c.buildMetadata(), "")
 	_, err := c.invokeUnary(ctx, PathPresence, reqBytes)
 	return err
 }
@@ -412,8 +470,9 @@ func summarizeToolArgs(args map[string]any) string {
 		if v, ok := args[key]; ok {
 			s := strings.TrimSpace(fmt.Sprintf("%v", v))
 			if s != "" {
-				if len(s) > 80 {
-					s = s[:80] + "..."
+				runes := []rune(s)
+				if len(runes) > 80 {
+					s = string(runes[:80]) + "..."
 				}
 				return s
 			}
@@ -532,7 +591,7 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 	req.Header.Set("TE", "trailers")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Ios-Bundle-Identifier", BundleID)
-	req.Header.Set("Accept-Language", "ko-KR")
+	req.Header.Set("Accept-Language", c.locale())
 	req.Header.Set("User-Agent", "grpc-c++/1.62.0 grpc-objc/1.62.0")
 
 	// 첫 메시지(RemoteToolConnectRequest)를 비동기로 즉시 전송
@@ -555,6 +614,11 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_, _ = c.authMgr.ForceRefresh(ctx)
+		return streamError, false, "16", fmt.Errorf("ExecuteRemoteTools HTTP 401 (토큰 갱신 후 재시도)")
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return streamError, false, "", fmt.Errorf("ExecuteRemoteTools HTTP %d: %s", resp.StatusCode, string(body))
@@ -622,7 +686,9 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 			return streamError, hadToolCalls, "", fmt.Errorf("ExecuteRemoteTools 프레임 수신 오류: %w", err)
 		}
 
-		fmt.Printf("[robin] ExecuteRemoteTools 프레임 수신 (len=%d, hex=%x)\n", len(frameBytes), frameBytes)
+		if isDebugWireEnabled() {
+			fmt.Printf("[robin] ExecuteRemoteTools 프레임 수신 (len=%d, hex=%x)\n", len(frameBytes), frameBytes)
+		}
 
 		ev, err := proto.DecodeExecuteRemoteToolsResponse(frameBytes)
 		if err != nil {
@@ -724,6 +790,7 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 					ID:          callResp.ID,
 					Response:    callResp.Response,
 					Attachments: atts,
+					UIState:     callResp.UIState,
 				})
 			}
 

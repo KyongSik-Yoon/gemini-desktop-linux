@@ -154,3 +154,72 @@ func TestDecodeMultiWatchResponseBatchWithActivity(t *testing.T) {
 		t.Fatalf("WatchError 판정 불일치: activity=%v, reconnect=%v, len=%d", hasActivity, needsReconnect, len(changes))
 	}
 }
+
+func TestParseFieldsOverflowProtection(t *testing.T) {
+	// tag=0x0a (field 1, WireBytes), varint=0xffffffffffffffff (math.MaxUint64)
+	malformed := []byte{0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}
+	if _, err := ParseFields(malformed); err == nil {
+		t.Fatalf("오버플로 WireBytes 입력에서 에러가 반환되어야 함")
+	}
+}
+
+func TestWakeUpRefreshDeviceStatusAndUIState(t *testing.T) {
+	// ClientAction { 27: RefreshDeviceStatus { 1: "DEV-1", 3: true } }
+	refresh := NewBuilder()
+	refresh.AppendString(1, "DEV-1")
+	refresh.AppendBool(3, true)
+	action := NewBuilder()
+	action.AppendMessage(27, refresh.Bytes())
+	sig := NewBuilder()
+	sig.AppendMessage(1, action.Bytes())
+
+	ev, err := DecodeWakeUpPayload(1, "bard-client-sync", sig.Bytes())
+	if err != nil {
+		t.Fatalf("RefreshDeviceStatus 디코딩 실패: %v", err)
+	}
+	if !ev.RefreshDeviceStatus || ev.RefreshDeviceID != "DEV-1" || !ev.RefreshRemoteEnabled {
+		t.Fatalf("RefreshDeviceStatus 필드 불일치: %+v", ev)
+	}
+
+	// FunctionResponseInput UIState(field 5) 인코딩 검증
+	encoded := EncodeRemoteToolResultRequest(nil, []FunctionResponseInput{{
+		Name:     "ui_control",
+		ID:       "call-1",
+		Response: map[string]any{"ok": true},
+		UIState:  `{"focused":"editor"}`,
+	}})
+	top, err := ParseFields(encoded)
+	if err != nil || len(top) == 0 {
+		t.Fatalf("EncodeRemoteToolResultRequest 파싱 실패: %v", err)
+	}
+	resFields, _ := ParseFields(top[0].Bytes)
+	frFields, _ := ParseFields(resFields[0].Bytes)
+	var gotUIState string
+	for _, f := range frFields {
+		if f.Num == 5 && f.WireType == WireBytes {
+			gotUIState = string(f.Bytes)
+		}
+	}
+	if gotUIState != `{"focused":"editor"}` {
+		t.Fatalf("UIState(field 5) 불일치: %q", gotUIState)
+	}
+}
+
+func TestDecodeUsageInfoNaNProtected(t *testing.T) {
+	// UsageInfo { 3: UsageBucket { 1: 1, 2: { 2: fixed32(NaN) } } }
+	detail := NewBuilder()
+	detail.AppendFixed32(2, 0x7fc00000) // quiet NaN
+	bucket := NewBuilder()
+	bucket.AppendInt32(1, 1)
+	bucket.AppendMessage(2, detail.Bytes())
+	root := NewBuilder()
+	root.AppendMessage(3, bucket.Bytes())
+
+	info, err := DecodeGetUsageInfoResponse(root.Bytes())
+	if err != nil || len(info.Buckets) != 1 {
+		t.Fatalf("DecodeGetUsageInfoResponse 실패: %v", err)
+	}
+	if info.Buckets[0].UsedRatio != 0 {
+		t.Fatalf("NaN UsedRatio는 0으로 정규화되어야 함: %v", info.Buckets[0].UsedRatio)
+	}
+}

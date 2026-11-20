@@ -33,18 +33,17 @@ func (d *Daemon) RemoteStatus() localapi.RemoteStatusSnapshot {
 	copy(events, d.recentEvents)
 	d.statusMu.RUnlock()
 
-	d.cfgMu.RLock()
 	enabled := d.cfg.IsRemoteEnabled()
-	folders := append([]string{}, d.cfg.ConnectedFolders...)
-	mcps := make([]localapi.RemoteMCPServerStatus, 0, len(d.cfg.MCPServers))
-	for _, m := range d.cfg.MCPServers {
+	folders := d.cfg.CloneConnectedFolders()
+	cfgMCPs := d.cfg.CloneMCPServers()
+	mcps := make([]localapi.RemoteMCPServerStatus, 0, len(cfgMCPs))
+	for _, m := range cfgMCPs {
 		mcps = append(mcps, localapi.RemoteMCPServerStatus{
 			ServerID:    m.ServerID,
 			DisplayName: m.DisplayName,
 			Enabled:     m.Enabled,
 		})
 	}
-	d.cfgMu.RUnlock()
 
 	punctualConnected := false
 	if d.watcher != nil {
@@ -79,10 +78,7 @@ func (d *Daemon) SubscribeRemoteEvents() (<-chan robin.ToolExecEvent, func()) {
 
 	unsub := func() {
 		d.statusMu.Lock()
-		if _, ok := d.subscribers[ch]; ok {
-			delete(d.subscribers, ch)
-			close(ch)
-		}
+		delete(d.subscribers, ch)
 		d.statusMu.Unlock()
 	}
 	return ch, unsub
@@ -111,18 +107,13 @@ func (d *Daemon) recordToolEvent(ev robin.ToolExecEvent) {
 			d.recentEvents = d.recentEvents[len(d.recentEvents)-maxRecentToolEvents:]
 		}
 	}
-	subs := make([]chan robin.ToolExecEvent, 0, len(d.subscribers))
 	for ch := range d.subscribers {
-		subs = append(subs, ch)
-	}
-	d.statusMu.Unlock()
-
-	for _, ch := range subs {
 		select {
 		case ch <- ev:
 		default:
 		}
 	}
+	d.statusMu.Unlock()
 }
 
 func (d *Daemon) notifyStatusChanged(toolName string) {
@@ -237,16 +228,7 @@ func (d *Daemon) AddConnectedFolder(ctx context.Context, dir string) error {
 	}
 
 	d.cfgMu.Lock()
-	exists := false
-	for _, cur := range d.cfg.ConnectedFolders {
-		if filepath.Clean(cur) == clean {
-			exists = true
-			break
-		}
-	}
-	if !exists {
-		d.cfg.ConnectedFolders = append(d.cfg.ConnectedFolders, clean)
-	}
+	d.cfg.AddConnectedFolder(clean)
 	enabled := d.cfg.IsRemoteEnabled()
 	saveErr := d.cfg.Save()
 	d.cfgMu.Unlock()
@@ -273,20 +255,11 @@ func (d *Daemon) RemoveConnectedFolder(ctx context.Context, dir string) error {
 	}
 
 	d.cfgMu.Lock()
-	next := make([]string, 0, len(d.cfg.ConnectedFolders))
-	removed := false
-	for _, cur := range d.cfg.ConnectedFolders {
-		if filepath.Clean(cur) == clean || cur == dir {
-			removed = true
-			continue
-		}
-		next = append(next, cur)
-	}
+	removed := d.cfg.RemoveConnectedFolder(clean, dir)
 	if !removed {
 		d.cfgMu.Unlock()
 		return fmt.Errorf("목록에 없는 폴더입니다: %s", clean)
 	}
-	d.cfg.ConnectedFolders = next
 	enabled := d.cfg.IsRemoteEnabled()
 	saveErr := d.cfg.Save()
 	d.cfgMu.Unlock()

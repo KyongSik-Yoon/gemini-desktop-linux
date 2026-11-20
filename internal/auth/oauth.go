@@ -143,17 +143,50 @@ type TokenData struct {
 	Scope        string    `json:"scope,omitempty"`
 }
 
+type refreshFlight struct {
+	done  chan struct{}
+	token string
+	err   error
+}
+
 // Manager는 OAuth 토큰 로드, 자동 갱신, 인터랙티브 로그인을 담당한다.
 type Manager struct {
 	mu         sync.Mutex
 	token      *TokenData
 	httpClient *http.Client
+
+	refreshMu  sync.Mutex
+	refreshing *refreshFlight
+
+	credMu       sync.Mutex
+	clientID     string
+	clientSecret string
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		httpClient: &http.Client{Timeout: 20 * time.Second},
 	}
+}
+
+func (m *Manager) getCredentials() (string, string, error) {
+	m.credMu.Lock()
+	if m.clientID != "" && m.clientSecret != "" {
+		id, sec := m.clientID, m.clientSecret
+		m.credMu.Unlock()
+		return id, sec, nil
+	}
+	m.credMu.Unlock()
+
+	id, sec, err := resolveCredentials()
+	if err != nil {
+		return "", "", err
+	}
+	m.credMu.Lock()
+	m.clientID = id
+	m.clientSecret = sec
+	m.credMu.Unlock()
+	return id, sec, nil
 }
 
 // LoadFromDisk는 저장된 토큰을 읽는다.
@@ -191,34 +224,176 @@ func (m *Manager) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(p), ".token-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	tmp := f.Name()
+	cleanup := func() {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // AccessToken은 유효한 Access Token을 반환하며 만료 임박 시 Refresh Token으로 자동 갱신한다.
+// 갱신 네트워크 호출은 전역 락 밖에서 singleflight로 병합 수행한다.
 func (m *Manager) AccessToken(ctx context.Context) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.getAccessToken(ctx, false)
+}
 
+// ForceRefresh는 서버가 401/UNAUTHENTICATED를 반환했을 때 Refresh Token으로 토큰을 강제 갱신한다.
+func (m *Manager) ForceRefresh(ctx context.Context) (string, error) {
+	return m.getAccessToken(ctx, true)
+}
+
+func (m *Manager) getAccessToken(ctx context.Context, force bool) (string, error) {
+	m.mu.Lock()
 	if m.token == nil {
 		if err := m.loadUnlocked(); err != nil {
+			m.mu.Unlock()
 			return "", fmt.Errorf("저장된 인증 토큰이 없습니다 ('gemini-remote login'을 먼저 실행하세요): %w", err)
 		}
 	}
-
-	if m.token.AccessToken != "" && time.Until(m.token.Expiry) > 2*time.Minute {
-		return m.token.AccessToken, nil
+	if !force && m.token.AccessToken != "" && time.Until(m.token.Expiry) > 2*time.Minute {
+		tok := m.token.AccessToken
+		m.mu.Unlock()
+		return tok, nil
 	}
-	if m.token.RefreshToken == "" {
+	refreshTok := m.token.RefreshToken
+	m.mu.Unlock()
+
+	if refreshTok == "" {
 		return "", errors.New("refresh_token이 없어 토큰을 갱신할 수 없습니다 ('gemini-remote login'을 실행하세요)")
 	}
-	if err := m.refreshLocked(ctx); err != nil {
+	return m.refreshSingleflight(ctx, refreshTok, force)
+}
+
+func (m *Manager) refreshSingleflight(ctx context.Context, refreshTok string, force bool) (string, error) {
+	m.refreshMu.Lock()
+	if fl := m.refreshing; fl != nil {
+		m.refreshMu.Unlock()
+		select {
+		case <-fl.done:
+			return fl.token, fl.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	// 직전 singleflight가 막 끝나 토큰이 이미 갱신되었는지 더블 체크
+	if !force {
+		m.mu.Lock()
+		if m.token != nil && m.token.AccessToken != "" && time.Until(m.token.Expiry) > 2*time.Minute {
+			tok := m.token.AccessToken
+			m.mu.Unlock()
+			m.refreshMu.Unlock()
+			return tok, nil
+		}
+		if m.token != nil && m.token.RefreshToken != "" {
+			refreshTok = m.token.RefreshToken
+		}
+		m.mu.Unlock()
+	}
+
+	fl := &refreshFlight{done: make(chan struct{})}
+	m.refreshing = fl
+	m.refreshMu.Unlock()
+
+	// 첫 호출자의 ctx 취소로 다른 대기 호출자까지 연쇄 실패하지 않도록 분리된 타임아웃 컨텍스트를 사용한다.
+	reqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	newTok, err := m.doRefreshHTTP(reqCtx, refreshTok)
+	cancel()
+
+	fl.token = newTok
+	fl.err = err
+	m.refreshMu.Lock()
+	m.refreshing = nil
+	m.refreshMu.Unlock()
+	close(fl.done)
+
+	return newTok, err
+}
+
+func (m *Manager) doRefreshHTTP(ctx context.Context, refreshTok string) (string, error) {
+	clientID, clientSecret, err := m.getCredentials()
+	if err != nil {
 		return "", err
 	}
-	return m.token.AccessToken, nil
+	form := url.Values{
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"refresh_token": {refreshTok},
+		"grant_type":    {"refresh_token"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OAuth 토큰 갱신 실패 (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	var raw struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "", err
+	}
+	if raw.ExpiresIn <= 0 {
+		raw.ExpiresIn = 3600
+	}
+
+	m.mu.Lock()
+	if m.token == nil {
+		m.token = &TokenData{RefreshToken: refreshTok}
+	}
+	m.token.AccessToken = raw.AccessToken
+	if raw.RefreshToken != "" {
+		m.token.RefreshToken = raw.RefreshToken
+	}
+	if raw.TokenType != "" {
+		m.token.TokenType = raw.TokenType
+	}
+	if raw.Scope != "" {
+		m.token.Scope = raw.Scope
+	}
+	m.token.Expiry = time.Now().Add(time.Duration(raw.ExpiresIn) * time.Second)
+	saveErr := m.saveLocked()
+	tok := m.token.AccessToken
+	m.mu.Unlock()
+	if saveErr != nil {
+		return "", saveErr
+	}
+	return tok, nil
 }
 
 func (m *Manager) loadUnlocked() error {
@@ -239,57 +414,14 @@ func (m *Manager) loadUnlocked() error {
 }
 
 func (m *Manager) refreshLocked(ctx context.Context) error {
-	clientID, clientSecret, err := resolveCredentials()
-	if err != nil {
-		return err
+	refreshTok := ""
+	if m.token != nil {
+		refreshTok = m.token.RefreshToken
 	}
-	form := url.Values{
-		"client_id":     {clientID},
-		"client_secret": {clientSecret},
-		"refresh_token": {m.token.RefreshToken},
-		"grant_type":    {"refresh_token"},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("OAuth 토큰 갱신 실패 (HTTP %d): %s", resp.StatusCode, string(body))
-	}
-
-	var raw struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
-		TokenType    string `json:"token_type"`
-		Scope        string `json:"scope"`
-	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return err
-	}
-	m.token.AccessToken = raw.AccessToken
-	if raw.RefreshToken != "" {
-		m.token.RefreshToken = raw.RefreshToken
-	}
-	if raw.TokenType != "" {
-		m.token.TokenType = raw.TokenType
-	}
-	if raw.Scope != "" {
-		m.token.Scope = raw.Scope
-	}
-	if raw.ExpiresIn <= 0 {
-		raw.ExpiresIn = 3600
-	}
-	m.token.Expiry = time.Now().Add(time.Duration(raw.ExpiresIn) * time.Second)
-	return m.saveLocked()
+	m.mu.Unlock()
+	_, err := m.doRefreshHTTP(ctx, refreshTok)
+	m.mu.Lock()
+	return err
 }
 
 // LoginInteractive는 로컬 루프백 서버(127.0.0.1:<port>)와 PKCE를 사용해 브라우저 OAuth 로그인을 수행한다.

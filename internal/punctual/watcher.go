@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,9 +29,10 @@ const (
 	PunctualProject = "assistant-bard"
 
 	// Signaler MultiWatch 구독이 서버 측에서 약 20분 만에 묵시 만료되므로 12분마다 선제 회전한다.
-	DefaultSessionMaxAge          = 12 * time.Minute
-	DefaultReadWatchdogTimeout    = 90 * time.Second
+	DefaultSessionMaxAge           = 12 * time.Minute
+	DefaultReadWatchdogTimeout     = 90 * time.Second
 	DefaultPunctualWatchdogTimeout = 3 * time.Minute
+	maxWebChannelChunkBytes        = 16 * 1024 * 1024
 )
 
 // Handler는 WakeUpEvent가 도착했을 때 호출되는 콜백이다.
@@ -177,6 +179,7 @@ func (w *Watcher) chooseServer(ctx context.Context, token string) (string, error
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
+	req.Header.Set("X-Goog-Encode-Response-If-Executable", "base64")
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
@@ -186,6 +189,12 @@ func (w *Watcher) chooseServer(ctx context.Context, token string) (string, error
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("chooseServer HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	if sid, derr := proto.DecodeChooseServerResponse(body); derr == nil {
+		return sid, nil
+	}
+	if decoded, berr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(body))); berr == nil {
+		return proto.DecodeChooseServerResponse(decoded)
 	}
 	return proto.DecodeChooseServerResponse(body)
 }
@@ -403,6 +412,9 @@ func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadClo
 
 		var chunk string
 		if length, lerr := strconv.Atoi(trimmed); lerr == nil && length > 0 {
+			if length > maxWebChannelChunkBytes {
+				return aid, fmt.Errorf("WebChannel 청크 크기 초과: %d bytes", length)
+			}
 			buf := make([]byte, length)
 			if _, rerr := io.ReadFull(reader, buf); rerr != nil {
 				watchdogMu.Lock()
@@ -439,7 +451,9 @@ func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadClo
 				continue
 			}
 			for _, ch := range changes {
-				fmt.Printf("[punctual] 이벤트 수신 (stream=%d, path=%s, len=%d, hex=%x)\n", ch.StreamID, ch.ObjectPath, len(ch.Payload), ch.Payload)
+				if os.Getenv("GEMINI_DEBUG_WIRE") == "1" {
+					fmt.Printf("[punctual] 이벤트 수신 (stream=%d, path=%s, len=%d, hex=%x)\n", ch.StreamID, ch.ObjectPath, len(ch.Payload), ch.Payload)
+				}
 				ev, err := proto.DecodeWakeUpPayload(ch.StreamID, ch.ObjectPath, ch.Payload)
 				if err != nil || ev == nil {
 					if err != nil {
@@ -447,10 +461,12 @@ func (w *Watcher) consumeBackChannel(handlerCtx context.Context, body io.ReadClo
 					}
 					continue
 				}
-				if ev.IsClientSyncHint {
+				if ev.RefreshDeviceStatus && ev.SessionRoutingKey == "" {
+					fmt.Printf("[punctual] 기기 상태 갱신 신호 수신 (remote_enabled=%v)\n", ev.RefreshRemoteEnabled)
+				} else if ev.IsClientSyncHint {
 					fmt.Printf("[punctual] 대화방 갱신 힌트 감지 (routing_key=%s)\n", ev.SessionRoutingKey)
 				} else {
-					fmt.Printf("[punctual] 원격 실행 트리거 확인 (routing_key=%s, target=%s, task=%s)\n", ev.SessionRoutingKey, ev.TargetDeviceID, ev.ScheduledTaskName)
+					fmt.Printf("[punctual] 원격 실행 트리거 확인 (routing_key=%s, task=%s)\n", ev.SessionRoutingKey, ev.ScheduledTaskName)
 				}
 				if ev.TargetDeviceID != "" && !strings.EqualFold(ev.TargetDeviceID, w.deviceID) {
 					continue

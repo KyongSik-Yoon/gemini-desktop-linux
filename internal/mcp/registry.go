@@ -50,7 +50,7 @@ func (r *Registry) reload() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for _, sc := range r.cfg.MCPServers {
+	for _, sc := range r.cfg.CloneMCPServers() {
 		if !sc.Enabled {
 			continue
 		}
@@ -142,7 +142,7 @@ func (r *Registry) Execute(ctx context.Context, serverID, toolName string, args 
 	case "obsidian":
 		return r.execObsidianTool(ctx, toolName, args)
 	default:
-		for _, sc := range r.cfg.MCPServers {
+		for _, sc := range r.cfg.CloneMCPServers() {
 			if sc.ServerID == serverID && sc.Command != "" {
 				return r.callExternalMCP(ctx, sc, toolName, args)
 			}
@@ -157,8 +157,8 @@ func (r *Registry) defaultRepoPath(args map[string]any) string {
 			return v
 		}
 	}
-	if len(r.cfg.ConnectedFolders) > 0 {
-		return r.cfg.ConnectedFolders[0]
+	if first := r.cfg.FirstConnectedFolder(); first != "" {
+		return first
 	}
 	wd, _ := os.Getwd()
 	return wd
@@ -225,22 +225,99 @@ func (r *Registry) execGitTool(ctx context.Context, toolName string, args map[st
 	}
 }
 
-func (r *Registry) vaultRoot(args map[string]any) string {
-	if v, ok := args["vault_path"].(string); ok && v != "" {
-		return v
+func (r *Registry) allowedVaultRoots() []string {
+	var roots []string
+	if v := strings.TrimSpace(r.cfg.GetObsidianVaultDir()); v != "" {
+		roots = append(roots, v)
 	}
-	if r.cfg.ObsidianVaultDir != "" {
-		return r.cfg.ObsidianVaultDir
+	roots = append(roots, r.cfg.CloneConnectedFolders()...)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, filepath.Join(home, "Documents"))
 	}
-	if len(r.cfg.ConnectedFolders) > 0 {
-		return r.cfg.ConnectedFolders[0]
+	return roots
+}
+
+func isWithinRoot(root, candidate string) bool {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
+		rootAbs = resolved
+	}
+	candAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(candAbs); err == nil {
+		candAbs = resolved
+	} else {
+		// 아직 존재하지 않는 파일(쓰기 대상)은 가장 가까운 기존 상위 디렉터리를 심볼릭 해석한다.
+		cur := candAbs
+		var tail []string
+		for {
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				break
+			}
+			tail = append([]string{filepath.Base(cur)}, tail...)
+			cur = parent
+			if resolvedParent, rerr := filepath.EvalSymlinks(cur); rerr == nil {
+				candAbs = filepath.Join(append([]string{resolvedParent}, tail...)...)
+				break
+			}
+		}
+	}
+	rel, err := filepath.Rel(rootAbs, candAbs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
+func (r *Registry) vaultRoot(args map[string]any) (string, error) {
+	if v, ok := args["vault_path"].(string); ok && strings.TrimSpace(v) != "" {
+		for _, allowed := range r.allowedVaultRoots() {
+			if isWithinRoot(allowed, v) {
+				abs, err := filepath.Abs(v)
+				if err != nil {
+					return "", err
+				}
+				return abs, nil
+			}
+		}
+		return "", fmt.Errorf("허용되지 않은 vault_path입니다: %s", v)
+	}
+	if v := strings.TrimSpace(r.cfg.GetObsidianVaultDir()); v != "" {
+		return v, nil
+	}
+	if first := r.cfg.FirstConnectedFolder(); first != "" {
+		return first, nil
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Documents")
+	return filepath.Join(home, "Documents"), nil
+}
+
+func safeVaultPath(vault, note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if note == "" || strings.IndexByte(note, 0) != -1 {
+		return "", fmt.Errorf("note_path가 유효하지 않습니다")
+	}
+	if filepath.IsAbs(note) {
+		return "", fmt.Errorf("볼트 상대 경로만 허용됩니다: %s", note)
+	}
+	full := filepath.Join(vault, note)
+	if !isWithinRoot(vault, full) {
+		return "", fmt.Errorf("볼트 범위를 벗어난 경로는 접근할 수 없습니다: %s", note)
+	}
+	return full, nil
 }
 
 func (r *Registry) execObsidianTool(_ context.Context, toolName string, args map[string]any) (map[string]any, error) {
-	vault := r.vaultRoot(args)
+	vault, err := r.vaultRoot(args)
+	if err != nil {
+		return nil, err
+	}
 	switch toolName {
 	case "obsidian_list_notes":
 		var notes []string
@@ -266,7 +343,10 @@ func (r *Registry) execObsidianTool(_ context.Context, toolName string, args map
 
 	case "obsidian_read_note":
 		note, _ := args["note_path"].(string)
-		full := filepath.Join(vault, note)
+		full, err := safeVaultPath(vault, note)
+		if err != nil {
+			return map[string]any{"error": err.Error()}, nil
+		}
 		data, err := os.ReadFile(full)
 		if err != nil {
 			return map[string]any{"error": err.Error()}, nil
@@ -276,7 +356,10 @@ func (r *Registry) execObsidianTool(_ context.Context, toolName string, args map
 	case "obsidian_write_note":
 		note, _ := args["note_path"].(string)
 		content, _ := args["content"].(string)
-		full := filepath.Join(vault, note)
+		full, err := safeVaultPath(vault, note)
+		if err != nil {
+			return map[string]any{"error": err.Error()}, nil
+		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return map[string]any{"error": err.Error()}, nil
 		}

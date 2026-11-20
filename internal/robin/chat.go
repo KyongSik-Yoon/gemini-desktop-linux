@@ -42,15 +42,7 @@ type UserProfile struct {
 }
 
 func (c *Client) buildChatMetadata() []byte {
-	locale := c.cfg.Locale
-	if locale == "" {
-		locale = "ko-KR"
-	}
-	tz := c.cfg.TimeZone
-	if tz == "" {
-		tz = "Asia/Seoul"
-	}
-	return proto.EncodeChatRequestMetadata(locale, tz, strings.ToUpper(c.cfg.DeviceID))
+	return proto.EncodeChatRequestMetadata(c.locale(), c.timeZone(), strings.ToUpper(c.cfg.DeviceID))
 }
 
 // GetUserStatus는 현재 계정의 사용 가능한 Gemini 모델 목록과 피커 구성을 조회한다(60초 TTL 캐시 및 동시 호출 병합).
@@ -459,26 +451,42 @@ func (c *Client) StreamQuery(ctx context.Context, params proto.ChatQueryParams, 
 	}
 
 	f1, f2, f3 := proto.EncodeProcessQueryFrames(c.buildChatMetadata(), params)
-	var body bytes.Buffer
-	body.Write(FrameGRPC(f1))
-	body.Write(FrameGRPC(f2))
-	body.Write(FrameGRPC(f3))
+	var rawBody bytes.Buffer
+	rawBody.Write(FrameGRPC(f1))
+	rawBody.Write(FrameGRPC(f2))
+	rawBody.Write(FrameGRPC(f3))
+	reqPayload := rawBody.Bytes()
 
 	grpcURL := "https://" + DefaultHost + PathProcessQuery
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, grpcURL, &body)
-	if err != nil {
-		return nil, err
+	doStream := func(tok string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, grpcURL, bytes.NewReader(reqPayload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/grpc")
+		req.Header.Set("TE", "trailers")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("X-Ios-Bundle-Identifier", BundleID)
+		req.Header.Set("Accept-Language", c.locale())
+		req.Header.Set("User-Agent", "grpc-c++/1.62.0 grpc-objc/1.62.0")
+		return c.h2Client.Do(req)
 	}
-	req.Header.Set("Content-Type", "application/grpc")
-	req.Header.Set("TE", "trailers")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Ios-Bundle-Identifier", BundleID)
-	req.Header.Set("Accept-Language", "ko-KR")
-	req.Header.Set("User-Agent", "grpc-c++/1.62.0 grpc-objc/1.62.0")
 
-	resp, err := c.h2Client.Do(req)
+	resp, err := doStream(token)
 	if err != nil {
 		return nil, fmt.Errorf("ProcessQuery 스트림 연결 실패: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if refreshed, rerr := c.authMgr.ForceRefresh(ctx); rerr == nil && refreshed != "" {
+			resp, err = doStream(refreshed)
+			if err != nil {
+				return nil, fmt.Errorf("ProcessQuery 재연결 실패: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("ProcessQuery 인증 실패 (HTTP 401)")
+		}
 	}
 	defer resp.Body.Close()
 
@@ -550,7 +558,10 @@ func (c *Client) StreamQuery(ctx context.Context, params proto.ChatQueryParams, 
 				final.StatusText = ch.StatusText
 			}
 			if len(ch.ToolActivities) > 0 {
-				final.ToolActivities = ch.ToolActivities
+				final.ToolActivities = mergeToolActivities(final.ToolActivities, ch.ToolActivities)
+			}
+			if len(ch.Artifacts) > 0 {
+				final.Artifacts = mergeTurnArtifacts(final.Artifacts, ch.Artifacts)
 			}
 
 			if ch.Type == "data" {
@@ -584,4 +595,41 @@ func (c *Client) StreamQuery(ctx context.Context, params proto.ChatQueryParams, 
 			}
 		}
 	}
+}
+
+func mergeToolActivities(dst, incoming []proto.RemoteToolActivity) []proto.RemoteToolActivity {
+	for _, item := range incoming {
+		updated := false
+		for i := range dst {
+			if (item.ID != "" && dst[i].ID == item.ID) || (item.ID == "" && dst[i].Name == item.Name && dst[i].Action == item.Action) {
+				dst[i] = item
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			dst = append(dst, item)
+		}
+	}
+	return dst
+}
+
+func mergeTurnArtifacts(dst, incoming []proto.TurnArtifact) []proto.TurnArtifact {
+	for _, item := range incoming {
+		updated := false
+		for i := range dst {
+			if (item.ID != "" && dst[i].ID == item.ID) || (item.ID == "" && item.Title != "" && dst[i].Title == item.Title) {
+				if item.Content == "" {
+					item.Content = dst[i].Content
+				}
+				dst[i] = item
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			dst = append(dst, item)
+		}
+	}
+	return dst
 }

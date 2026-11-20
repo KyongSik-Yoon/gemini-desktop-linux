@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sam/gemini-remote-linux/internal/auth"
 	"github.com/sam/gemini-remote-linux/internal/config"
@@ -43,16 +44,65 @@ type CallResponse struct {
 	UIState     string
 }
 
+const (
+	maxBgOutputBytes = 256 * 1024
+	maxTrackedProcs  = 64
+	procRetainTTL    = 10 * time.Minute
+)
+
+// cappedBuffer는 자식 프로세스 stdout/stderr 쓰기와 동시 읽기를 보호하고 최대 바이트를 제한한다.
+type cappedBuffer struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	maxBytes  int
+	truncated bool
+}
+
+func newCappedBuffer(maxBytes int) *cappedBuffer {
+	return &cappedBuffer{maxBytes: maxBytes}
+}
+
+func (cb *cappedBuffer) Write(p []byte) (int, error) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if cb.maxBytes <= 0 {
+		return cb.buf.Write(p)
+	}
+	rem := cb.maxBytes - cb.buf.Len()
+	if rem > 0 {
+		if len(p) <= rem {
+			_, _ = cb.buf.Write(p)
+		} else {
+			_, _ = cb.buf.Write(p[:rem])
+			cb.truncated = true
+		}
+	} else if len(p) > 0 {
+		cb.truncated = true
+	}
+	return len(p), nil
+}
+
+func (cb *cappedBuffer) String() string {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	s := cb.buf.String()
+	if cb.truncated {
+		return s + "\n...[output capped]"
+	}
+	return s
+}
+
 type bgProcess struct {
-	mu       sync.Mutex
-	id       string
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   bytes.Buffer
-	stderr   bytes.Buffer
-	done     chan struct{}
-	exitCode int
-	exited   bool
+	mu         sync.Mutex
+	id         string
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     *cappedBuffer
+	stderr     *cappedBuffer
+	done       chan struct{}
+	exitCode   int
+	exited     bool
+	finishedAt time.Time
 }
 
 // Executor는 macOS Gemini.app의 DesktopToolServiceImpl 전체 도구를 리눅스에서 실행한다.
@@ -61,6 +111,7 @@ type Executor struct {
 	authMgr          *auth.Manager
 	uploader         *scotty.Uploader
 	mcpReg           *mcp.Registry
+	httpClient       *http.Client
 	onFoldersChanged func()
 
 	procMu sync.Mutex
@@ -69,11 +120,50 @@ type Executor struct {
 
 func NewExecutor(cfg *config.Config, authMgr *auth.Manager, uploader *scotty.Uploader, mcpReg *mcp.Registry) *Executor {
 	return &Executor{
-		cfg:      cfg,
-		authMgr:  authMgr,
-		uploader: uploader,
-		mcpReg:   mcpReg,
-		procs:    make(map[string]*bgProcess),
+		cfg:        cfg,
+		authMgr:    authMgr,
+		uploader:   uploader,
+		mcpReg:     mcpReg,
+		httpClient: &http.Client{Timeout: 60 * time.Second},
+		procs:      make(map[string]*bgProcess),
+	}
+}
+
+func (e *Executor) getHTTPClient() *http.Client {
+	if e.httpClient != nil {
+		return e.httpClient
+	}
+	return &http.Client{Timeout: 60 * time.Second}
+}
+
+func (e *Executor) pruneExitedProcsLocked() {
+	now := time.Now()
+	for id, p := range e.procs {
+		p.mu.Lock()
+		exited := p.exited
+		fin := p.finishedAt
+		p.mu.Unlock()
+		if exited && !fin.IsZero() && now.Sub(fin) > procRetainTTL {
+			delete(e.procs, id)
+		}
+	}
+	for len(e.procs) >= maxTrackedProcs {
+		var oldestID string
+		var oldestTime time.Time
+		for id, p := range e.procs {
+			p.mu.Lock()
+			exited := p.exited
+			fin := p.finishedAt
+			p.mu.Unlock()
+			if exited && (oldestID == "" || fin.Before(oldestTime)) {
+				oldestID = id
+				oldestTime = fin
+			}
+		}
+		if oldestID == "" {
+			break
+		}
+		delete(e.procs, oldestID)
 	}
 }
 
@@ -484,14 +574,14 @@ func (e *Executor) defaultWorkDir(args map[string]any) string {
 	if wd != "" {
 		return expandHome(wd)
 	}
-	if len(e.cfg.ConnectedFolders) > 0 {
-		return e.cfg.ConnectedFolders[0]
+	if first := e.cfg.FirstConnectedFolder(); first != "" {
+		return first
 	}
 	d, _ := os.Getwd()
 	return d
 }
 
-func (e *Executor) toolRunCommand(_ context.Context, args map[string]any) (map[string]any, error) {
+func (e *Executor) toolRunCommand(ctx context.Context, args map[string]any) (map[string]any, error) {
 	cmdStr := strArg(args, "command", "CommandLine")
 	if cmdStr == "" {
 		return nil, fmt.Errorf("command 파라미터가 비어 있습니다")
@@ -513,19 +603,23 @@ func (e *Executor) toolRunCommand(_ context.Context, args map[string]any) (map[s
 	}
 
 	proc := &bgProcess{
-		id:    newShortID(),
-		cmd:   cmd,
-		stdin: stdin,
-		done:  make(chan struct{}),
+		id:     newShortID(),
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: newCappedBuffer(maxBgOutputBytes),
+		stderr: newCappedBuffer(maxBgOutputBytes),
+		done:   make(chan struct{}),
 	}
-	cmd.Stdout = &proc.stdout
-	cmd.Stderr = &proc.stderr
+	cmd.Stdout = proc.stdout
+	cmd.Stderr = proc.stderr
 
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
 
 	e.procMu.Lock()
+	e.pruneExitedProcsLocked()
 	e.procs[proc.id] = proc
 	e.procMu.Unlock()
 
@@ -533,6 +627,11 @@ func (e *Executor) toolRunCommand(_ context.Context, args map[string]any) (map[s
 		err := cmd.Wait()
 		proc.mu.Lock()
 		proc.exited = true
+		proc.finishedAt = time.Now()
+		if proc.stdin != nil {
+			_ = proc.stdin.Close()
+			proc.stdin = nil
+		}
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
 				proc.exitCode = ee.ExitCode()
@@ -544,19 +643,28 @@ func (e *Executor) toolRunCommand(_ context.Context, args map[string]any) (map[s
 		close(proc.done)
 	}()
 
+	timer := time.NewTimer(time.Duration(timeoutMs) * time.Millisecond)
+	defer timer.Stop()
+
 	select {
 	case <-proc.done:
 		proc.mu.Lock()
-		defer proc.mu.Unlock()
+		exitCode := proc.exitCode
+		proc.mu.Unlock()
 		return map[string]any{
 			"status":    "completed",
-			"exit_code": proc.exitCode,
+			"exit_code": exitCode,
 			"stdout":    truncateStr(proc.stdout.String(), 64000),
 			"stderr":    truncateStr(proc.stderr.String(), 64000),
 		}, nil
-	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+	case <-ctx.Done():
 		proc.mu.Lock()
-		defer proc.mu.Unlock()
+		if !proc.exited && proc.cmd.Process != nil {
+			_ = proc.cmd.Process.Kill()
+		}
+		proc.mu.Unlock()
+		return nil, ctx.Err()
+	case <-timer.C:
 		return map[string]any{
 			"command_id": proc.id,
 			"status":     "running",
@@ -566,7 +674,7 @@ func (e *Executor) toolRunCommand(_ context.Context, args map[string]any) (map[s
 	}
 }
 
-func (e *Executor) toolCommandStatus(_ context.Context, args map[string]any) (map[string]any, error) {
+func (e *Executor) toolCommandStatus(ctx context.Context, args map[string]any) (map[string]any, error) {
 	id := strArg(args, "command_id", "CommandId")
 	waitSec := intArg(args, 5, "wait_seconds", "WaitDurationSeconds")
 	if waitSec < 0 {
@@ -584,22 +692,29 @@ func (e *Executor) toolCommandStatus(_ context.Context, args map[string]any) (ma
 	}
 
 	if waitSec > 0 {
+		timer := time.NewTimer(time.Duration(waitSec) * time.Second)
 		select {
 		case <-proc.done:
-		case <-time.After(time.Duration(waitSec) * time.Second):
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
+		timer.Stop()
 	}
 
 	proc.mu.Lock()
-	defer proc.mu.Unlock()
+	exited := proc.exited
+	exitCode := proc.exitCode
+	proc.mu.Unlock()
 	status := "running"
-	if proc.exited {
+	if exited {
 		status = "completed"
 	}
 	return map[string]any{
 		"command_id": proc.id,
 		"status":     status,
-		"exit_code":  proc.exitCode,
+		"exit_code":  exitCode,
 		"stdout":     truncateStr(proc.stdout.String(), 64000),
 		"stderr":     truncateStr(proc.stderr.String(), 64000),
 	}, nil
@@ -618,17 +733,26 @@ func (e *Executor) toolSendCommandInput(ctx context.Context, args map[string]any
 		return nil, fmt.Errorf("command_id=%q를 찾을 수 없습니다", id)
 	}
 
-	if terminate && proc.cmd.Process != nil {
-		_ = proc.cmd.Process.Kill()
-	} else if input != "" && proc.stdin != nil {
+	proc.mu.Lock()
+	if terminate {
+		if !proc.exited && proc.cmd.Process != nil {
+			_ = proc.cmd.Process.Kill()
+		}
+	} else if input != "" && !proc.exited && proc.stdin != nil {
 		_, _ = io.WriteString(proc.stdin, input)
 	}
+	proc.mu.Unlock()
 
 	if waitMs > 0 {
+		timer := time.NewTimer(time.Duration(waitMs) * time.Millisecond)
 		select {
 		case <-proc.done:
-		case <-time.After(time.Duration(waitMs) * time.Millisecond):
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
+		timer.Stop()
 	}
 	return e.toolCommandStatus(ctx, map[string]any{"command_id": id, "wait_seconds": 0})
 }
@@ -666,6 +790,10 @@ func (e *Executor) toolReadFile(args map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return toolReadFileFromData(data, args), nil
+}
+
+func toolReadFileFromData(data []byte, args map[string]any) map[string]any {
 	lines := strings.Split(string(data), "\n")
 	totalLines := len(lines)
 
@@ -685,7 +813,7 @@ func (e *Executor) toolReadFile(args map[string]any) (map[string]any, error) {
 			"start_line":  startLine,
 			"end_line":    totalLines,
 			"truncated":   false,
-		}, nil
+		}
 	}
 	truncated := false
 	if endLine-startLine+1 > limit {
@@ -699,7 +827,7 @@ func (e *Executor) toolReadFile(args map[string]any) (map[string]any, error) {
 		"start_line":  startLine,
 		"end_line":    endLine,
 		"truncated":   truncated,
-	}, nil
+	}
 }
 
 func isMultimodalBinary(mimeType, fileName string, data []byte) bool {
@@ -722,10 +850,9 @@ func (e *Executor) toolViewFile(ctx context.Context, args map[string]any) (map[s
 	mimeType := scotty.DetectMimeType(p, data)
 	fileName := filepath.Base(p)
 
-	// 텍스트/코드/설정 파일은 Scotty나 Google Drive에 업로드하지 않고 로컬에서 바로 읽어 반환한다.
+	// 텍스트/코드/설정 파일은 이미 읽은 메모리 버퍼로 바로 반환한다(중복 디스크 I/O 제거).
 	if !isMultimodalBinary(mimeType, fileName, data) {
-		r, err := e.toolReadFile(args)
-		return r, nil, "", err
+		return toolReadFileFromData(data, args), nil, "", nil
 	}
 
 	token, err := e.authMgr.AccessToken(ctx)
@@ -761,10 +888,22 @@ func (e *Executor) toolWriteFile(args map[string]any) (map[string]any, error) {
 	}, nil
 }
 
+func existingFilePerm(p string) os.FileMode {
+	if fi, err := os.Stat(p); err == nil {
+		if perm := fi.Mode().Perm(); perm != 0 {
+			return perm
+		}
+	}
+	return 0o644
+}
+
 func (e *Executor) toolReplaceFileContent(args map[string]any) (map[string]any, error) {
 	p := expandHome(strArg(args, "path", "TargetFile"))
 	oldStr := strArg(args, "old_str", "TargetContent")
 	newStr := strArg(args, "new_str", "ReplacementContent")
+	if oldStr == "" {
+		return nil, fmt.Errorf("old_str가 비어 있어 치환할 수 없습니다")
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
@@ -774,7 +913,7 @@ func (e *Executor) toolReplaceFileContent(args map[string]any) (map[string]any, 
 		return nil, fmt.Errorf("파일에서 old_str를 찾을 수 없습니다: %s", p)
 	}
 	updated := strings.Replace(text, oldStr, newStr, 1)
-	if err := os.WriteFile(p, []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(updated), existingFilePerm(p)); err != nil {
 		return nil, err
 	}
 	return map[string]any{"success": true, "path": p}, nil
@@ -804,7 +943,7 @@ func (e *Executor) toolMultiReplaceFileContent(args map[string]any) (map[string]
 			applied++
 		}
 	}
-	if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(text), existingFilePerm(p)); err != nil {
 		return nil, err
 	}
 	return map[string]any{"success": true, "path": p, "applied_edits": applied}, nil
@@ -969,22 +1108,24 @@ func (e *Executor) toolConnectFolders(args map[string]any) (map[string]any, erro
 		}
 	}
 	var connected, rejected []string
-	existing := make(map[string]bool)
-	for _, f := range e.cfg.ConnectedFolders {
-		existing[f] = true
-	}
+	addedAny := false
 	for _, p := range paths {
-		if st, err := os.Stat(p); err == nil && st.IsDir() {
-			connected = append(connected, p)
-			if !existing[p] {
-				e.cfg.ConnectedFolders = append(e.cfg.ConnectedFolders, p)
-				existing[p] = true
+		clean := filepath.Clean(p)
+		if abs, err := filepath.Abs(clean); err == nil {
+			clean = abs
+		}
+		if st, err := os.Stat(clean); err == nil && st.IsDir() {
+			connected = append(connected, clean)
+			if e.cfg.AddConnectedFolder(clean) {
+				addedAny = true
 			}
 		} else {
 			rejected = append(rejected, p)
 		}
 	}
-	_ = e.cfg.Save()
+	if addedAny {
+		_ = e.cfg.Save()
+	}
 	if len(connected) > 0 && e.onFoldersChanged != nil {
 		go e.onFoldersChanged()
 	}
@@ -1025,10 +1166,31 @@ func (e *Executor) toolListSkills() (map[string]any, error) {
 	return map[string]any{"skills": skills}, nil
 }
 
+func isSafeSkillName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || strings.IndexByte(name, 0) != -1 {
+		return false
+	}
+	return filepath.Base(name) == name
+}
+
 func (e *Executor) toolReadSkill(args map[string]any) (map[string]any, error) {
-	name := strArg(args, "name", "skill_name")
+	name := strings.TrimSpace(strArg(args, "name", "skill_name"))
+	if !isSafeSkillName(name) {
+		return nil, fmt.Errorf("유효하지 않은 스킬 이름입니다: %q", name)
+	}
 	for _, base := range e.skillDirs() {
-		skillMD := filepath.Join(base, name, "SKILL.md")
+		baseAbs, err := filepath.Abs(base)
+		if err != nil {
+			continue
+		}
+		skillMD := filepath.Join(baseAbs, name, "SKILL.md")
+		rel, err := filepath.Rel(baseAbs, skillMD)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
 		if data, err := os.ReadFile(skillMD); err == nil {
 			return map[string]any{
 				"name":    name,
@@ -1130,8 +1292,7 @@ func (e *Executor) toolUploadToDrive(ctx context.Context, args map[string]any) (
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "multipart/related; boundary="+mw.Boundary())
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := e.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to upload file to Drive: %w", err)
 	}
@@ -1191,8 +1352,7 @@ func (e *Executor) toolDownloadFromDrive(ctx context.Context, args map[string]an
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := e.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to download file from Drive: %w", err)
 	}
@@ -1243,8 +1403,7 @@ func (e *Executor) toolExportFromDrive(ctx context.Context, args map[string]any)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := e.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to export file from Drive: %w", err)
 	}
@@ -1303,6 +1462,12 @@ func boolArg(args map[string]any, keys ...string) bool {
 }
 
 func expandHome(p string) string {
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return p
+	}
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(home, p[2:])
@@ -1324,7 +1489,11 @@ func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "\n...[truncated]"
+	cut := maxLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n...[truncated]"
 }
 
 func newShortID() string {

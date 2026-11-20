@@ -557,7 +557,8 @@ func DecodeGetUsageInfoResponse(data []byte) (*UsageInfo, error) {
 					b.Label = "사용량 한도"
 				}
 			}
-			if b.UsedRatio < 0 {
+			ratio := float64(b.UsedRatio)
+			if math.IsNaN(ratio) || math.IsInf(ratio, 0) || b.UsedRatio < 0 {
 				b.UsedRatio = 0
 			} else if b.UsedRatio > 1 {
 				b.UsedRatio = 1
