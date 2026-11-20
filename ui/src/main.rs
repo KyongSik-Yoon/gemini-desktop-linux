@@ -220,6 +220,14 @@ impl ChatMessage {
     }
 }
 
+struct CanvasPreviewState {
+    msg_idx: usize,
+    art_idx: usize,
+    artifact: TurnArtifact,
+    parsed_markdown: Option<markdown_view::ParsedMarkdown>,
+    show_raw: bool,
+}
+
 pub(crate) struct App {
     pub(crate) palette: AppTheme,
     pub(crate) theme_mode: ThemeMode,
@@ -253,7 +261,7 @@ pub(crate) struct App {
     search_hits: Vec<SearchHit>,
     search_loading: bool,
     settings_modal_open: bool,
-    canvas_preview: Option<(usize, usize, TurnArtifact)>,
+    canvas_preview: Option<CanvasPreviewState>,
     local_tz_offset_secs: i64,
 
     // 모델 선택기 · 사고 수준 · 도구/기능 모드 · 맞춤설정
@@ -482,6 +490,7 @@ pub(crate) enum Message {
     ToggleMessageThoughts(usize),
     ToggleMessageTools(usize),
     OpenCanvasPreview(usize, usize),
+    ToggleCanvasRaw,
     CloseCanvasPreview,
     RunCanvasHtml(usize, usize),
     OpenFilePicker,
@@ -1559,8 +1568,8 @@ impl App {
                         m.tool_activities = t.tool_activities.clone();
                         m.generated_images = t.generated_images.clone();
                         m.artifacts = t.artifacts.clone();
-                        m.is_scheduled_run = t.is_scheduled_run
-                            || (t.user_text.is_empty() && t.user_attachments.is_empty());
+                        m.is_scheduled_run =
+                            t.is_scheduled_run || !t.scheduled_title.is_empty();
                         m.scheduled_title = t.scheduled_title.clone();
                         m.aborted = t.aborted;
                         m.timestamp_unix = t.timestamp_unix;
@@ -2258,7 +2267,24 @@ impl App {
                     .get(msg_idx)
                     .and_then(|m| m.artifacts.get(art_idx))
                 {
-                    self.canvas_preview = Some((msg_idx, art_idx, art.clone()));
+                    let parsed_markdown = if markdown_view::is_markdown_artifact(art) {
+                        Some(markdown_view::ParsedMarkdown::parse(&art.content))
+                    } else {
+                        None
+                    };
+                    self.canvas_preview = Some(CanvasPreviewState {
+                        msg_idx,
+                        art_idx,
+                        artifact: art.clone(),
+                        parsed_markdown,
+                        show_raw: false,
+                    });
+                }
+                Task::none()
+            }
+            Message::ToggleCanvasRaw => {
+                if let Some(preview) = &mut self.canvas_preview {
+                    preview.show_raw = !preview.show_raw;
                 }
                 Task::none()
             }
@@ -2709,8 +2735,8 @@ impl App {
             })
             .into();
 
-        if let Some((msg_idx, art_idx, art)) = &self.canvas_preview {
-            stack![base, self.view_canvas_preview_modal(*msg_idx, *art_idx, art)]
+        if let Some(preview) = &self.canvas_preview {
+            stack![base, self.view_canvas_preview_modal(preview)]
                 .width(Fill)
                 .height(Fill)
                 .into()
@@ -4573,16 +4599,19 @@ impl App {
             .into()
     }
 
-    /// Canvas 아티팩트 소스 코드 프리뷰 모달.
+    /// Canvas 아티팩트 프리뷰 모달 (마크다운 문서는 리치 렌더링, 코드는 고정폭 프리뷰).
     fn view_canvas_preview_modal<'a>(
         &'a self,
-        msg_idx: usize,
-        art_idx: usize,
-        art: &'a TurnArtifact,
+        preview: &'a CanvasPreviewState,
     ) -> Element<'a, Message> {
+        let msg_idx = preview.msg_idx;
+        let art_idx = preview.art_idx;
+        let art = &preview.artifact;
+        let is_md_doc = preview.parsed_markdown.is_some();
         let loc = self.locale;
         let pal = &self.palette;
         let bg_popover = pal.bg_popover;
+        let bg_canvas = pal.bg_canvas;
         let bg_code = pal.bg_code;
         let bg_chip = pal.bg_chip;
         let bg_hover = pal.bg_hover;
@@ -4620,10 +4649,17 @@ impl App {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        if !art.language.is_empty() {
+        let badge_label = if !art.language.is_empty() {
+            art.language.to_uppercase()
+        } else if is_md_doc {
+            "MARKDOWN".to_string()
+        } else {
+            String::new()
+        };
+        if !badge_label.is_empty() {
             header = header.push(
                 container(
-                    text(art.language.to_uppercase())
+                    text(badge_label)
                         .size(11)
                         .font(font_medium())
                         .color(text_secondary),
@@ -4642,12 +4678,31 @@ impl App {
 
         header = header.push(space::horizontal());
 
+        if is_md_doc {
+            let toggle_label = if preview.show_raw {
+                t(loc, "문서 보기")
+            } else {
+                t(loc, "원문 보기")
+            };
+            header = header.push(
+                button(text(toggle_label).size(12).color(text_secondary))
+                    .on_press(Message::ToggleCanvasRaw)
+                    .padding([5, 10])
+                    .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 8.0)),
+            );
+        }
+
         if !art.content.is_empty() {
+            let copy_label = if is_md_doc {
+                t(loc, "내용 복사")
+            } else {
+                t(loc, "코드 복사")
+            };
             header = header.push(
                 button(
                     row![
                         Icon::Copy.view(13.0, text_secondary),
-                        text(t(loc, "코드 복사")).size(12).color(text_secondary),
+                        text(copy_label).size(12).color(text_secondary),
                     ]
                     .spacing(5)
                     .align_y(Alignment::Center),
@@ -4719,38 +4774,77 @@ impl App {
         );
 
         let pal_scroll = self.palette.clone();
-        let code_body = container(
-            scrollable(
-                container(
-                    text(&art.content)
-                        .size(12.5)
-                        .font(iced::Font::MONOSPACE)
-                        .line_height(text::LineHeight::Relative(1.52))
-                        .color(text_primary),
-                )
-                .padding([14, 16]),
+        let body: Element<'a, Message> = if let (false, Some(parsed)) =
+            (preview.show_raw, preview.parsed_markdown.as_ref())
+        {
+            let rendered = markdown_view::view(
+                parsed,
+                self.palette.markdown_settings(),
+                self.palette.clone(),
+                loc,
+                markdown_view::RenderContext {
+                    message_idx: msg_idx,
+                    generated_images: &[],
+                    artifacts: &[],
+                    image_cache: &self.library_image_cache,
+                },
+            );
+            container(
+                scrollable(container(rendered).padding([18, 22]).width(Fill))
+                    .width(Fill)
+                    .height(Fill)
+                    .direction(scrollable::Direction::Vertical(
+                        scrollable::Scrollbar::default().width(6).scroller_width(6),
+                    ))
+                    .style(move |_, status| pal_scroll.subtle_scrollable_style(status)),
             )
             .width(Fill)
             .height(Fill)
-            .direction(scrollable::Direction::Both {
-                vertical: scrollable::Scrollbar::default().width(6).scroller_width(6),
-                horizontal: scrollable::Scrollbar::default().width(6).scroller_width(6),
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg_canvas)),
+                border: Border {
+                    radius: 12.0.into(),
+                    width: 1.0,
+                    color: border_subtle,
+                },
+                ..container::Style::default()
             })
-            .style(move |_, status| pal_scroll.subtle_scrollable_style(status)),
-        )
-        .width(Fill)
-        .height(Fill)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(bg_code)),
-            border: Border {
-                radius: 12.0.into(),
-                width: 1.0,
-                color: border_subtle,
-            },
-            ..container::Style::default()
-        });
+            .into()
+        } else {
+            container(
+                scrollable(
+                    container(
+                        text(&art.content)
+                            .size(12.5)
+                            .font(iced::Font::MONOSPACE)
+                            .line_height(text::LineHeight::Relative(1.52))
+                            .color(text_primary),
+                    )
+                    .padding([14, 16]),
+                )
+                .width(Fill)
+                .height(Fill)
+                .direction(scrollable::Direction::Both {
+                    vertical: scrollable::Scrollbar::default().width(6).scroller_width(6),
+                    horizontal: scrollable::Scrollbar::default().width(6).scroller_width(6),
+                })
+                .style(move |_, status| pal_scroll.subtle_scrollable_style(status)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg_code)),
+                border: Border {
+                    radius: 12.0.into(),
+                    width: 1.0,
+                    color: border_subtle,
+                },
+                ..container::Style::default()
+            })
+            .into()
+        };
 
-        let modal_card = container(column![header, code_body].spacing(12).width(Fill).height(Fill))
+        let modal_card = container(column![header, body].spacing(12).width(Fill).height(Fill))
             .padding(18)
             .max_width(880.0)
             .width(Fill)

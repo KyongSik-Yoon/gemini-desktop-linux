@@ -513,17 +513,17 @@ fn parse_gfm_table(table_lines: &[&str]) -> Option<ParsedTable> {
         rows.push(parsed_row);
     }
 
-    // 열 너비 계산: 최소 96px ~ 최대 300px 범위로 균형 배분, 전체 합이 740px 이내면 깔끔하게 맞춤
+    // 열 너비 계산: 최소 96px ~ 최대 290px 범위로 균형 배분, 가용 폭(698px) 이내(680px)로 맞춰 불필요한 가로 스크롤 방지
     let mut col_widths: Vec<f32> = max_units
         .iter()
         .map(|&u| ((u as f32) * 7.8 + 28.0).clamp(96.0, 290.0))
         .collect();
     let total_w: f32 = col_widths.iter().sum();
-    let target_min_w = 720.0;
+    let target_min_w = 680.0;
     if total_w > 0.0 && total_w < target_min_w {
         let scale = target_min_w / total_w;
         for w in &mut col_widths {
-            *w = (*w * scale).min(380.0);
+            *w = (*w * scale).min(360.0);
         }
     }
 
@@ -537,10 +537,54 @@ fn parse_gfm_table(table_lines: &[&str]) -> Option<ParsedTable> {
     })
 }
 
+fn contains_br_tag(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 4 {
+        return false;
+    }
+    for i in 0..=bytes.len() - 3 {
+        if bytes[i] == b'<'
+            && bytes[i + 1].eq_ignore_ascii_case(&b'b')
+            && bytes[i + 2].eq_ignore_ascii_case(&b'r')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 문자 슬라이스의 `start` 위치가 `<br>`, `<br/>`, `<br />` (대소문자 무관) 태그라면 소비할 문자 길이를 반환한다.
+fn match_br_tag_chars(chars: &[char], start: usize) -> Option<usize> {
+    let len = chars.len();
+    if start + 3 >= len || chars[start] != '<' {
+        return None;
+    }
+    if !chars[start + 1].eq_ignore_ascii_case(&'b') || !chars[start + 2].eq_ignore_ascii_case(&'r')
+    {
+        return None;
+    }
+    let mut j = start + 3;
+    while j < len && chars[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j < len && chars[j] == '/' {
+        j += 1;
+        while j < len && chars[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    }
+    if j < len && chars[j] == '>' {
+        Some(j - start + 1)
+    } else {
+        None
+    }
+}
+
 /// CommonMark(`pulldown_cmark`)가 한국어(CJK) 텍스트에서 구두점으로 끝나는 볼드 강조(`**텍스트(괄호)**입니다`)를
-/// 파싱하지 못하는 엣지 케이스를 보정한다. 코드 펜스와 인라인 코드는 원문 그대로 보존한다.
+/// 파싱하지 못하는 엣지 케이스와 일반 본문의 `<br>` HTML 줄바꿈 태그를 보정한다.
+/// 코드 펜스와 인라인 코드는 원문 그대로 보존한다.
 pub(crate) fn preprocess_markdown(raw: &str) -> String {
-    if !raw.contains("**") {
+    if !raw.contains("**") && !contains_br_tag(raw) {
         return raw.to_string();
     }
 
@@ -627,6 +671,25 @@ fn preprocess_inline_line(line: &str, out: &mut String) {
             out.push(chars[i + 1]);
             i += 2;
             continue;
+        }
+
+        // 인라인 코드 외부의 `<br>`, `<br/>`, `<br />` 태그를 마크다운 하드 줄바꿈으로 변환
+        if chars[i] == '<' {
+            if let Some(tag_len) = match_br_tag_chars(&chars, i) {
+                let next_idx = i + tag_len;
+                let followed_by_newline = next_idx < len
+                    && (chars[next_idx] == '\n'
+                        || (chars[next_idx] == '\r'
+                            && next_idx + 1 < len
+                            && chars[next_idx + 1] == '\n'));
+                if followed_by_newline {
+                    out.push_str("  ");
+                } else {
+                    out.push_str("  \n");
+                }
+                i += tag_len;
+                continue;
+            }
         }
 
         // 정확히 두 개의 별표(`**`)만 볼드 경계로 판별 (`***` 이상은 그대로 유지)
@@ -850,6 +913,42 @@ pub(crate) fn generated_image_cache_key(url: &str) -> String {
 
 pub(crate) fn turn_attachment_cache_key(url: &str) -> String {
     format!("turn_att:{url}")
+}
+
+/// Canvas 아티팩트가 Deep Research 보고서 등 마크다운 문서인지 판별한다.
+pub(crate) fn is_markdown_artifact(art: &TurnArtifact) -> bool {
+    let lang = art.language.trim().to_ascii_lowercase();
+    if lang == "markdown" || lang == "md" {
+        return true;
+    }
+    if !lang.is_empty() {
+        return false;
+    }
+    let trimmed = art.content.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let head_lower = trimmed.to_ascii_lowercase();
+    if head_lower.starts_with("<!doctype html")
+        || head_lower.starts_with("<html")
+        || head_lower.starts_with("<?xml")
+        || trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with("import ")
+        || trimmed.starts_with("package ")
+        || trimmed.starts_with("function ")
+        || trimmed.starts_with("def ")
+        || trimmed.starts_with("class ")
+        || trimmed.starts_with("fn ")
+    {
+        return false;
+    }
+    trimmed.starts_with("# ")
+        || trimmed.starts_with("## ")
+        || trimmed.starts_with("### ")
+        || trimmed.contains("\n## ")
+        || trimmed.contains("\n### ")
+        || (trimmed.contains("**") && trimmed.contains('\n'))
 }
 
 #[derive(Clone)]
@@ -1870,14 +1969,28 @@ impl GeminiMarkdownViewer {
             art.title.clone()
         };
         let line_count = art.content.lines().count();
-        let meta_sub = if !art.language.is_empty() && line_count > 0 {
+        let is_md = is_markdown_artifact(art);
+        let lang_label = if !art.language.is_empty() {
+            art.language.as_str()
+        } else if is_md {
+            "Markdown"
+        } else {
+            ""
+        };
+        let meta_sub = if !lang_label.is_empty() && line_count > 0 {
             if loc.is_en() {
-                format!("Canvas · {} · {} lines", art.language, line_count)
+                format!("Canvas · {} · {} lines", lang_label, line_count)
             } else {
-                format!("Canvas · {} · {}줄", art.language, line_count)
+                format!("Canvas · {} · {}줄", lang_label, line_count)
             }
-        } else if !art.language.is_empty() {
-            format!("Canvas · {}", art.language)
+        } else if !lang_label.is_empty() {
+            format!("Canvas · {}", lang_label)
+        } else if line_count > 0 {
+            if loc.is_en() {
+                format!("Canvas · {} lines", line_count)
+            } else {
+                format!("Canvas · {}줄", line_count)
+            }
         } else {
             "Canvas".to_string()
         };
@@ -1897,8 +2010,13 @@ impl GeminiMarkdownViewer {
 
         let mut actions = row![].spacing(6).align_y(Alignment::Center);
         if !art.content.is_empty() {
+            let open_label = if is_md {
+                t(loc, "문서 보기")
+            } else {
+                t(loc, "코드 보기")
+            };
             actions = actions.push(
-                button(text(t(loc, "코드 보기")).size(12).color(text_strong))
+                button(text(open_label).size(12).color(text_strong))
                     .on_press(Message::OpenCanvasPreview(ctx.message_idx, resolved_idx))
                     .padding([6, 12])
                     .style(move |_, status| {
@@ -2238,5 +2356,61 @@ mod tests {
                 ("연합뉴스".to_string(), true),
             ]
         );
+    }
+
+    #[test]
+    fn 일반_본문_br_줄바꿈_변환과_코드_내_보존() {
+        let src = "첫째 줄<br>• 둘째 줄<BR />셋째 줄<br>\n넷째 줄 `inline <br> keep`\n```html\n<div><br/></div>\n```\n";
+        let processed = preprocess_markdown(src);
+        assert!(processed.contains("첫째 줄  \n• 둘째 줄  \n셋째 줄  \n넷째 줄"));
+        assert!(processed.contains("`inline <br> keep`"));
+        assert!(processed.contains("<div><br/></div>"));
+    }
+
+    #[test]
+    fn 짧은_표_열_너비가_가용_폭_이내로_유지() {
+        let src = "| 항목 | 값 |\n| --- | ---: |\n| A | 10 |\n| B | 20 |\n";
+        let parsed = ParsedMarkdown::parse(src);
+        let MarkdownBlock::Table(tbl) = &parsed.blocks[0] else {
+            panic!("표 블록이어야 합니다");
+        };
+        let total: f32 = tbl.col_widths.iter().sum();
+        assert!(
+            total <= 685.0,
+            "짧은 표의 전체 폭({total})이 가용 폭 이내여야 합니다"
+        );
+    }
+
+    #[test]
+    fn 마크다운_canvas_아티팩트_판별() {
+        use super::is_markdown_artifact;
+        use crate::ipc::TurnArtifact;
+
+        let report = TurnArtifact {
+            id: String::new(),
+            title: "심층 리포트".into(),
+            language: String::new(),
+            content: "# **2026년 복합기 비교**\n\n본문 요약입니다.".into(),
+            url: String::new(),
+        };
+        assert!(is_markdown_artifact(&report));
+
+        let html = TurnArtifact {
+            id: String::new(),
+            title: "게임".into(),
+            language: String::new(),
+            content: "<!DOCTYPE html><html><body>hi</body></html>".into(),
+            url: String::new(),
+        };
+        assert!(!is_markdown_artifact(&html));
+
+        let py = TurnArtifact {
+            id: String::new(),
+            title: "script.py".into(),
+            language: "python".into(),
+            content: "# comment\nprint('hi')".into(),
+            url: String::new(),
+        };
+        assert!(!is_markdown_artifact(&py));
     }
 }
