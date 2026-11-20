@@ -236,6 +236,31 @@ func decodeTimestampSeconds(data []byte) int64 {
 	return 0
 }
 
+// TurnAttachment는 과거 턴 사용자 질문에 첨부된 파일/이미지 메타데이터다.
+type TurnAttachment struct {
+	Name     string `json:"name"`
+	URL      string `json:"url,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	Width    int32  `json:"width,omitempty"`
+	Height   int32  `json:"height,omitempty"`
+}
+
+// GeneratedImage는 모델 응답에서 생성된 이미지 메타데이터다.
+type GeneratedImage struct {
+	URL           string `json:"url"`
+	Title         string `json:"title,omitempty"`
+	PlaceholderID string `json:"placeholder_id,omitempty"`
+}
+
+// TurnArtifact는 모델 응답에 포함된 Canvas/인터랙티브 코드 아티팩트다.
+type TurnArtifact struct {
+	ID       string `json:"id,omitempty"`
+	Title    string `json:"title"`
+	Language string `json:"language,omitempty"`
+	Content  string `json:"content,omitempty"`
+	URL      string `json:"url,omitempty"`
+}
+
 // ConversationTurn은 대화방 내 단일 질문-응답 턴이다.
 type ConversationTurn struct {
 	ConversationID   string               `json:"conversation_id"`
@@ -244,10 +269,15 @@ type ConversationTurn struct {
 	ParentRequestID  string               `json:"parent_request_id,omitempty"`
 	ParentResponseID string               `json:"parent_response_id,omitempty"`
 	UserText         string               `json:"user_text"`
+	UserAttachments  []TurnAttachment     `json:"user_attachments,omitempty"`
 	ModelText        string               `json:"model_text"`
 	Thoughts         string               `json:"thoughts,omitempty"`
 	StatusText       string               `json:"status_text,omitempty"`
 	ToolActivities   []RemoteToolActivity `json:"tool_activities,omitempty"`
+	GeneratedImages  []GeneratedImage     `json:"generated_images,omitempty"`
+	Artifacts        []TurnArtifact       `json:"artifacts,omitempty"`
+	IsScheduledRun   bool                 `json:"is_scheduled_run,omitempty"`
+	ScheduledTitle   string               `json:"scheduled_title,omitempty"`
 	ModelAttribution string               `json:"model_attribution,omitempty"`
 	BardModeID       string               `json:"bard_mode_id,omitempty"`
 	Aborted          bool                 `json:"aborted,omitempty"`
@@ -319,8 +349,15 @@ func decodeConversationTurn(data []byte) (ConversationTurn, error) {
 				if r.Num == 1 && r.WireType == WireBytes { // SavedUserQuery
 					qf, _ := ParseFields(r.Bytes)
 					for _, q := range qf {
-						if q.Num == 1 && q.WireType == WireBytes {
-							t.UserText = string(q.Bytes)
+						switch q.Num {
+						case 1:
+							if q.WireType == WireBytes {
+								t.UserText = string(q.Bytes)
+							}
+						case 5: // 사용자 첨부 파일/이미지 목록
+							if q.WireType == WireBytes {
+								t.UserAttachments = append(t.UserAttachments, decodeSavedUserAttachments(q.Bytes)...)
+							}
 						}
 					}
 				}
@@ -339,9 +376,12 @@ func decodeConversationTurn(data []byte) (ConversationTurn, error) {
 					selectedID = string(s.Bytes)
 				case 5: // repeated StatusUpdateResponse (히스토리 사고/도구 요약)
 					if s.WireType == WireBytes {
-						st, acts := decodeStatusUpdateResponse(s.Bytes)
+						st, goalTitle, acts := decodeStatusUpdateResponseDetail(s.Bytes)
 						if st != "" {
 							t.StatusText = st
+						}
+						if goalTitle != "" && t.ScheduledTitle == "" {
+							t.ScheduledTitle = goalTitle
 						}
 						if len(acts) > 0 {
 							t.ToolActivities = append(t.ToolActivities, acts...)
@@ -359,8 +399,20 @@ func decodeConversationTurn(data []byte) (ConversationTurn, error) {
 			t.ResponseID = chosen.ResponseID
 			t.ModelText = chosen.Text
 			t.Thoughts = chosen.Thoughts
+			if len(chosen.Artifacts) > 0 {
+				t.Artifacts = chosen.Artifacts
+			}
 		case 5: // Timestamp
 			t.TimestampUnix = decodeTimestampSeconds(f.Bytes)
+		case 17: // 예약 실행 메타데이터 (f1 == 1)
+			if f.WireType == WireBytes {
+				sf, _ := ParseFields(f.Bytes)
+				for _, s := range sf {
+					if s.Num == 1 && s.WireType == WireVarint && s.Varint != 0 {
+						t.IsScheduledRun = true
+					}
+				}
+			}
 		case 18: // request_timestamp_micros (Timestamp가 비었을 때 보조)
 			if t.TimestampUnix == 0 && f.WireType == WireVarint {
 				t.TimestampUnix = int64(f.Varint) / 1_000_000
@@ -370,10 +422,60 @@ func decodeConversationTurn(data []byte) (ConversationTurn, error) {
 	return t, nil
 }
 
+func decodeSavedUserAttachments(data []byte) []TurnAttachment {
+	fields, err := ParseFields(data)
+	if err != nil {
+		return nil
+	}
+	var out []TurnAttachment
+	for _, f := range fields {
+		if f.Num != 4 || f.WireType != WireBytes {
+			continue
+		}
+		af, err := ParseFields(f.Bytes)
+		if err != nil {
+			continue
+		}
+		var att TurnAttachment
+		for _, a := range af {
+			switch a.Num {
+			case 3:
+				if a.WireType == WireBytes {
+					att.Name = strings.TrimSpace(string(a.Bytes))
+				}
+			case 4:
+				if a.WireType == WireBytes {
+					att.URL = strings.TrimSpace(string(a.Bytes))
+				}
+			case 12:
+				if a.WireType == WireBytes {
+					att.MimeType = strings.TrimSpace(string(a.Bytes))
+				}
+			case 16:
+				if a.WireType == WireBytes {
+					df, _ := ParseFields(a.Bytes)
+					for _, d := range df {
+						if d.Num == 1 && d.WireType == WireVarint {
+							att.Width = int32(d.Varint)
+						} else if d.Num == 2 && d.WireType == WireVarint {
+							att.Height = int32(d.Varint)
+						}
+					}
+				}
+			}
+		}
+		if att.Name != "" || att.URL != "" {
+			out = append(out, att)
+		}
+	}
+	return out
+}
+
 type decodedModelResponse struct {
 	ResponseID        string
 	Text              string
 	Thoughts          string
+	Artifacts         []TurnArtifact
 	CompletenessState int32
 }
 
@@ -398,6 +500,12 @@ func decodeModelResponse(data []byte) decodedModelResponse {
 					out.Thoughts = decodeDisplayText(tf.Bytes)
 				}
 			}
+		case 13: // Canvas / Immersive 아티팩트
+			if f.WireType == WireBytes {
+				if art, ok := decodeTurnArtifact(f.Bytes); ok {
+					out.Artifacts = append(out.Artifacts, art)
+				}
+			}
 		case 19:
 			out.CompletenessState = int32(f.Varint)
 		}
@@ -408,6 +516,101 @@ func decodeModelResponse(data []byte) decodedModelResponse {
 		out.Text = spanTagRe.ReplaceAllString(displayText, "")
 	}
 	return out
+}
+
+func decodeTurnArtifact(data []byte) (TurnArtifact, bool) {
+	fields, err := ParseFields(data)
+	if err != nil {
+		return TurnArtifact{}, false
+	}
+	var art TurnArtifact
+	var fencedFallback string
+	for _, f := range fields {
+		if f.WireType != WireBytes {
+			continue
+		}
+		switch f.Num {
+		case 1: // 메타데이터 (f1=ID/파일명, f13=언어)
+			mf, _ := ParseFields(f.Bytes)
+			for _, m := range mf {
+				if m.WireType != WireBytes {
+					continue
+				}
+				switch m.Num {
+				case 1:
+					art.ID = strings.TrimSpace(string(m.Bytes))
+				case 13:
+					if art.Language == "" {
+						art.Language = strings.TrimSpace(string(m.Bytes))
+					}
+				}
+			}
+		case 3: // 본문 컨테이너 (f1.f5.{f1: code, f2: lang})
+			f1s, _ := ParseFields(f.Bytes)
+			for _, f1 := range f1s {
+				if f1.Num != 1 || f1.WireType != WireBytes {
+					continue
+				}
+				f5s, _ := ParseFields(f1.Bytes)
+				for _, f5 := range f5s {
+					if f5.Num != 5 || f5.WireType != WireBytes {
+						continue
+					}
+					cfs, _ := ParseFields(f5.Bytes)
+					for _, cf := range cfs {
+						if cf.WireType != WireBytes {
+							continue
+						}
+						switch cf.Num {
+						case 1:
+							if len(cf.Bytes) > 0 {
+								art.Content = string(cf.Bytes)
+							}
+						case 2:
+							if len(cf.Bytes) > 0 {
+								art.Language = strings.TrimSpace(string(cf.Bytes))
+							}
+						}
+					}
+				}
+			}
+		case 4: // 코드 펜스 포함 본문 폴백
+			if len(f.Bytes) > 0 {
+				fencedFallback = string(f.Bytes)
+			}
+		case 6: // 제목
+			art.Title = strings.TrimSpace(string(f.Bytes))
+		case 7: // 웹 Canvas URL
+			art.URL = strings.TrimSpace(string(f.Bytes))
+		}
+	}
+	if art.Content == "" && fencedFallback != "" {
+		art.Content = stripOuterCodeFence(fencedFallback)
+	}
+	if art.Title == "" && art.ID != "" {
+		art.Title = art.ID
+	}
+	if art.Title == "" && art.Content == "" && art.URL == "" {
+		return TurnArtifact{}, false
+	}
+	return art, true
+}
+
+func stripOuterCodeFence(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, "```") {
+		return s
+	}
+	idx := strings.IndexByte(trimmed, '\n')
+	if idx < 0 {
+		return s
+	}
+	body := trimmed[idx+1:]
+	if strings.HasSuffix(body, "```") {
+		body = strings.TrimSuffix(body, "```")
+		body = strings.TrimSuffix(body, "\n")
+	}
+	return body
 }
 
 func pickModelResponse(candidates []decodedModelResponse, selectedID string) decodedModelResponse {
@@ -621,6 +824,7 @@ type ChatStreamChunk struct {
 	ThoughtsDelta     string               `json:"thoughts_delta,omitempty"`
 	StatusText        string               `json:"status_text,omitempty"`
 	ToolActivities    []RemoteToolActivity `json:"tool_activities,omitempty"`
+	Artifacts         []TurnArtifact       `json:"artifacts,omitempty"`
 	TargetDeviceName  string               `json:"target_device_name,omitempty"`
 	Title             string               `json:"title,omitempty"`
 	ModelAttribution  string               `json:"model,omitempty"`
@@ -701,6 +905,9 @@ func decodeClientGenerateResponse(data []byte) ChatStreamChunk {
 				chunk.ResponseID = mr.ResponseID
 				chunk.Text = mr.Text
 				chunk.Thoughts = mr.Thoughts
+				if len(mr.Artifacts) > 0 {
+					chunk.Artifacts = mr.Artifacts
+				}
 				chunk.CompletenessState = mr.CompletenessState
 			}
 		case 2: // ResponseIdentifiers
@@ -743,11 +950,17 @@ func decodeClientGenerateResponse(data []byte) ChatStreamChunk {
 }
 
 func decodeStatusUpdateResponse(data []byte) (string, []RemoteToolActivity) {
+	statusText, _, activities := decodeStatusUpdateResponseDetail(data)
+	return statusText, activities
+}
+
+func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteToolActivity) {
 	fields, err := ParseFields(data)
 	if err != nil {
-		return "", nil
+		return "", "", nil
 	}
 	var statusText string
+	var goalTitle string
 	var activities []RemoteToolActivity
 	for _, f := range fields {
 		switch f.Num {
@@ -834,9 +1047,15 @@ func decodeStatusUpdateResponse(data []byte) (string, []RemoteToolActivity) {
 					if statusText == "" && rf.WireType == WireBytes && len(rf.Bytes) > 0 {
 						statusText = string(rf.Bytes)
 					}
-				case 9: // goal_title
-					if statusText == "" && rf.WireType == WireBytes && len(rf.Bytes) > 0 {
-						statusText = string(rf.Bytes)
+				case 9: // goal_title (예약 작업/태스크 제목)
+					if rf.WireType == WireBytes && len(rf.Bytes) > 0 {
+						title := strings.TrimSpace(string(rf.Bytes))
+						if goalTitle == "" {
+							goalTitle = title
+						}
+						if statusText == "" {
+							statusText = title
+						}
 					}
 				case 10: // summary
 					if statusText == "" && rf.WireType == WireBytes && len(rf.Bytes) > 0 {
@@ -846,7 +1065,7 @@ func decodeStatusUpdateResponse(data []byte) (string, []RemoteToolActivity) {
 			}
 		}
 	}
-	return statusText, activities
+	return statusText, goalTitle, activities
 }
 
 // EncodeAbortGenerationRequest는 진행 중인 생성을 중단하는 요청을 인코딩한다.

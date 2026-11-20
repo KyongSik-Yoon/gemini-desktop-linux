@@ -4,6 +4,7 @@ mod glow;
 mod i18n;
 mod icons;
 mod ipc;
+mod markdown_view;
 mod pages;
 mod popovers;
 mod theme;
@@ -12,7 +13,7 @@ use capture::VoiceRecorder;
 use glow::{AvatarCircleMask, WelcomeGlow};
 use i18n::{LanguagePref, Locale, pick, t};
 use iced::widget::{
-    button, canvas, column, container, image, markdown, mouse_area, operation, rich_text, row,
+    button, canvas, column, container, image, markdown, mouse_area, operation, row,
     scrollable, space, stack, text, text_editor, text_input,
 };
 use iced::{
@@ -22,11 +23,12 @@ use iced::{
 use icons::{Icon, sparkle_color};
 use ipc::{
     BardModeOption, BotSummary, BotsResponse, ChatStreamChunk, ChatStreamRequest,
-    ConversationSummary, ConversationTurn, DevicesResponse, HealthResponse, LibraryEntry,
-    LibraryResponse, ListConversationsResponse, ListTurnsResponse, ModelsResponse, Notebook,
-    NotebooksResponse, RecommendedSchedule, RegisteredDevice, RemoteEvent, RemoteStatusSnapshot,
-    RemoteToolActivity, ScheduleRunResult, ScheduledTask, SchedulesResponse, SearchHit,
-    SearchResponse, ShareResponse, StreamEvent, UIPreferences, UsageInfo, UserProfile,
+    ConversationSummary, ConversationTurn, DevicesResponse, GeneratedImage, HealthResponse,
+    LibraryEntry, LibraryResponse, ListConversationsResponse, ListTurnsResponse, ModelsResponse,
+    Notebook, NotebooksResponse, RecommendedSchedule, RegisteredDevice, RemoteEvent,
+    RemoteStatusSnapshot, RemoteToolActivity, ScheduleRunResult, ScheduledTask, SchedulesResponse,
+    SearchHit, SearchResponse, ShareResponse, StreamEvent, TurnArtifact, TurnAttachment,
+    UIPreferences, UsageInfo, UserProfile,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -134,7 +136,7 @@ impl ConvFilter {
 struct ChatMessage {
     role: Role,
     raw_text: String,
-    markdown: markdown::Content,
+    markdown: markdown_view::ParsedMarkdown,
     thoughts: String,
     thoughts_expanded: bool,
     model_name: String,
@@ -142,8 +144,16 @@ struct ChatMessage {
     response_id: String,
     status_text: String,
     tool_activities: Vec<RemoteToolActivity>,
+    tools_expanded: bool,
     target_device_name: String,
     attachments: Vec<String>,
+    attachment_items: Vec<TurnAttachment>,
+    generated_images: Vec<GeneratedImage>,
+    artifacts: Vec<TurnArtifact>,
+    is_scheduled_run: bool,
+    scheduled_title: String,
+    aborted: bool,
+    timestamp_unix: i64,
 }
 
 impl ChatMessage {
@@ -151,7 +161,7 @@ impl ChatMessage {
         Self {
             role: Role::User,
             raw_text: text,
-            markdown: markdown::Content::new(),
+            markdown: markdown_view::ParsedMarkdown::empty(),
             thoughts: String::new(),
             thoughts_expanded: false,
             model_name: String::new(),
@@ -159,13 +169,21 @@ impl ChatMessage {
             response_id: String::new(),
             status_text: String::new(),
             tool_activities: Vec::new(),
+            tools_expanded: false,
             target_device_name: String::new(),
             attachments,
+            attachment_items: Vec::new(),
+            generated_images: Vec::new(),
+            artifacts: Vec::new(),
+            is_scheduled_run: false,
+            scheduled_title: String::new(),
+            aborted: false,
+            timestamp_unix: 0,
         }
     }
 
     fn model(text: String, thoughts: String, model_name: String) -> Self {
-        let md = markdown::Content::parse(&text);
+        let md = markdown_view::ParsedMarkdown::parse(&text);
         Self {
             role: Role::Model,
             raw_text: text,
@@ -177,168 +195,28 @@ impl ChatMessage {
             response_id: String::new(),
             status_text: String::new(),
             tool_activities: Vec::new(),
+            tools_expanded: false,
             target_device_name: String::new(),
             attachments: Vec::new(),
+            attachment_items: Vec::new(),
+            generated_images: Vec::new(),
+            artifacts: Vec::new(),
+            is_scheduled_run: false,
+            scheduled_title: String::new(),
+            aborted: false,
+            timestamp_unix: 0,
         }
     }
 
     fn push_delta(&mut self, delta: &str, full_text: &str) {
         if !delta.is_empty() && full_text.starts_with(&self.raw_text) {
+            let prev = self.raw_text.clone();
             self.raw_text.push_str(delta);
-            self.markdown.push_str(delta);
+            self.markdown.push_delta(&prev, delta, &self.raw_text);
         } else if !full_text.is_empty() && full_text != self.raw_text {
             self.raw_text = full_text.to_string();
-            self.markdown = markdown::Content::parse(&self.raw_text);
+            self.markdown = markdown_view::ParsedMarkdown::parse(&self.raw_text);
         }
-    }
-}
-
-struct GeminiMarkdownViewer {
-    palette: AppTheme,
-    locale: Locale,
-}
-
-impl<'a> markdown::Viewer<'a, Message> for GeminiMarkdownViewer {
-    fn on_link_click(url: markdown::Uri) -> Message {
-        Message::LinkClicked(url)
-    }
-
-    fn code_block(
-        &self,
-        settings: markdown::Settings,
-        language: Option<&'a str>,
-        code: &'a str,
-        lines: &'a [markdown::Text],
-    ) -> Element<'a, Message> {
-        let pal = self.palette.clone();
-        let lang_label = language
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or("code");
-        let code_owned = code.to_string();
-        let fg_code_header = Color::from_rgb(0.84, 0.88, 0.94);
-
-        let header = container(
-            row![
-                text(lang_label)
-                    .size(12)
-                    .font(font_medium())
-                    .color(Color::from_rgb(0.68, 0.74, 0.84)),
-                space::horizontal(),
-                button(
-                    row![
-                        Icon::Copy.view(13.0, fg_code_header),
-                        text(t(self.locale, "복사")).size(12).color(fg_code_header),
-                    ]
-                    .spacing(5)
-                    .align_y(Alignment::Center),
-                )
-                .on_press(Message::CopyText(code_owned))
-                .padding([4, 10])
-                .style(|_, status| {
-                    let hovered = matches!(status, button::Status::Hovered);
-                    button::Style {
-                        background: Some(Background::Color(if hovered {
-                            Color::from_rgba(1.0, 1.0, 1.0, 0.14)
-                        } else {
-                            Color::from_rgba(1.0, 1.0, 1.0, 0.06)
-                        })),
-                        text_color: Color::from_rgb(0.86, 0.90, 0.96),
-                        border: Border {
-                            radius: 6.0.into(),
-                            ..Border::default()
-                        },
-                        ..button::Style::default()
-                    }
-                }),
-            ]
-            .align_y(Alignment::Center),
-        )
-        .padding([7, 14])
-        .width(Fill)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(pal.bg_code_header)),
-            border: Border {
-                radius: iced::border::Radius {
-                    top_left: 12.0,
-                    top_right: 12.0,
-                    bottom_right: 0.0,
-                    bottom_left: 0.0,
-                },
-                ..Border::default()
-            },
-            ..container::Style::default()
-        });
-
-        let code_lines = column(lines.iter().map(|line| {
-            rich_text(line.spans(settings.style))
-                .on_link_click(Self::on_link_click)
-                .font(settings.style.code_block_font)
-                .size(settings.code_size)
-                .color(Color::from_rgb(0.86, 0.90, 0.96))
-                .into()
-        }))
-        .spacing(2);
-
-        let pal_scroll = self.palette.clone();
-        let body = scrollable(container(code_lines).padding([12, 14]))
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::default()
-                    .width(5)
-                    .scroller_width(5),
-            ))
-            .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
-
-        let bg_code = self.palette.bg_code;
-        let border_col = self.palette.border_subtle;
-        container(column![header, body])
-            .width(Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(bg_code)),
-                border: Border {
-                    radius: 12.0.into(),
-                    width: 1.0,
-                    color: border_col,
-                },
-                ..container::Style::default()
-            })
-            .into()
-    }
-
-    fn quote(
-        &self,
-        settings: markdown::Settings,
-        contents: &'a [markdown::Item],
-    ) -> Element<'a, Message> {
-        let bar_color = self.palette.accent;
-        let bg_color = self.palette.bg_thought;
-        container(
-            row![
-                container(space::vertical().height(Fill))
-                    .width(Length::Fixed(3.0))
-                    .style(move |_| container::Style {
-                        background: Some(Background::Color(bar_color)),
-                        border: Border {
-                            radius: 2.0.into(),
-                            ..Border::default()
-                        },
-                        ..container::Style::default()
-                    }),
-                markdown::items(self, settings, contents),
-            ]
-            .spacing(12)
-            .height(Length::Shrink),
-        )
-        .padding([8, 12])
-        .width(Fill)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(bg_color)),
-            border: Border {
-                radius: 8.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        })
-        .into()
     }
 }
 
@@ -375,6 +253,8 @@ pub(crate) struct App {
     search_hits: Vec<SearchHit>,
     search_loading: bool,
     settings_modal_open: bool,
+    canvas_preview: Option<(usize, usize, TurnArtifact)>,
+    local_tz_offset_secs: i64,
 
     // 모델 선택기 · 사고 수준 · 도구/기능 모드 · 맞춤설정
     mode_picker_title: String,
@@ -600,6 +480,10 @@ pub(crate) enum Message {
     SetComposerMode(ComposerMode),
     ToggleTemporary,
     ToggleMessageThoughts(usize),
+    ToggleMessageTools(usize),
+    OpenCanvasPreview(usize, usize),
+    CloseCanvasPreview,
+    RunCanvasHtml(usize, usize),
     OpenFilePicker,
     FilesPicked(Result<Vec<PathBuf>, String>),
     StartScreenCapture,
@@ -653,6 +537,8 @@ impl App {
             search_hits: Vec::new(),
             search_loading: false,
             settings_modal_open: false,
+            canvas_preview: None,
+            local_tz_offset_secs: detect_local_tz_offset_secs(),
             mode_picker_title: String::new(),
             models: Vec::new(),
             selected_model_id: None,
@@ -909,6 +795,10 @@ impl App {
                             }
                         }
                     } else if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        if self.canvas_preview.is_some() {
+                            self.canvas_preview = None;
+                            return Task::none();
+                        }
                         if self.search_modal_open {
                             self.search_modal_open = false;
                             return Task::none();
@@ -1580,6 +1470,7 @@ impl App {
                 self.parent_response_id.clear();
                 self.messages.clear();
                 self.renaming_conv_id = None;
+                self.canvas_preview = None;
                 self.loading_history = true;
                 self.error_banner = None;
 
@@ -1614,14 +1505,48 @@ impl App {
                 }
                 self.messages.clear();
                 self.message_feedback.clear();
+                let mut tasks: Vec<Task<Message>> = vec![Self::scroll_to_bottom()];
+                let mut preload_count = 0usize;
+                let mut queued_keys: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+
                 for t in &turns {
-                    if !t.user_text.is_empty() {
-                        self.messages
-                            .push(ChatMessage::user(t.user_text.clone(), Vec::new()));
+                    if !t.user_text.is_empty() || !t.user_attachments.is_empty() {
+                        let names: Vec<String> = t
+                            .user_attachments
+                            .iter()
+                            .filter(|a| !a.name.is_empty())
+                            .map(|a| a.name.clone())
+                            .collect();
+                        let mut um = ChatMessage::user(t.user_text.clone(), names);
+                        um.timestamp_unix = t.timestamp_unix;
+                        um.attachment_items = t.user_attachments.clone();
+                        for att in &t.user_attachments {
+                            if preload_count < 24
+                                && is_attachment_image(att)
+                                && !att.url.is_empty()
+                            {
+                                let key = markdown_view::turn_attachment_cache_key(&att.url);
+                                if !self.library_image_cache.contains_key(&key)
+                                    && queued_keys.insert(key.clone())
+                                {
+                                    let url = att.url.clone();
+                                    tasks.push(Task::perform(
+                                        ipc::fetch_library_image(url),
+                                        move |r| Message::LibraryImageLoaded(key, r),
+                                    ));
+                                    preload_count += 1;
+                                }
+                            }
+                        }
+                        self.messages.push(um);
                     }
                     if !t.model_text.is_empty()
                         || !t.thoughts.is_empty()
                         || !t.tool_activities.is_empty()
+                        || !t.generated_images.is_empty()
+                        || !t.artifacts.is_empty()
+                        || t.aborted
                     {
                         let mut m = ChatMessage::model(
                             t.model_text.clone(),
@@ -1632,6 +1557,28 @@ impl App {
                         m.response_id = t.response_id.clone();
                         m.status_text = t.status_text.clone();
                         m.tool_activities = t.tool_activities.clone();
+                        m.generated_images = t.generated_images.clone();
+                        m.artifacts = t.artifacts.clone();
+                        m.is_scheduled_run = t.is_scheduled_run
+                            || (t.user_text.is_empty() && t.user_attachments.is_empty());
+                        m.scheduled_title = t.scheduled_title.clone();
+                        m.aborted = t.aborted;
+                        m.timestamp_unix = t.timestamp_unix;
+                        for img in &t.generated_images {
+                            if preload_count < 24 && !img.url.is_empty() {
+                                let key = markdown_view::generated_image_cache_key(&img.url);
+                                if !self.library_image_cache.contains_key(&key)
+                                    && queued_keys.insert(key.clone())
+                                {
+                                    let url = img.url.clone();
+                                    tasks.push(Task::perform(
+                                        ipc::fetch_library_image(url),
+                                        move |r| Message::LibraryImageLoaded(key, r),
+                                    ));
+                                    preload_count += 1;
+                                }
+                            }
+                        }
                         self.messages.push(m);
                     }
                 }
@@ -1640,7 +1587,7 @@ impl App {
                     self.parent_response_id = last.response_id.clone();
                     self.active_model = last.model_attribution.clone();
                 }
-                Self::scroll_to_bottom()
+                Task::batch(tasks)
             }
             Message::TurnsLoaded(conv_id, Err(e)) => {
                 if self.active_conv_id.as_deref() == Some(conv_id.as_str()) {
@@ -2299,6 +2246,51 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ToggleMessageTools(idx) => {
+                if let Some(msg) = self.messages.get_mut(idx) {
+                    msg.tools_expanded = !msg.tools_expanded;
+                }
+                Task::none()
+            }
+            Message::OpenCanvasPreview(msg_idx, art_idx) => {
+                if let Some(art) = self
+                    .messages
+                    .get(msg_idx)
+                    .and_then(|m| m.artifacts.get(art_idx))
+                {
+                    self.canvas_preview = Some((msg_idx, art_idx, art.clone()));
+                }
+                Task::none()
+            }
+            Message::CloseCanvasPreview => {
+                self.canvas_preview = None;
+                Task::none()
+            }
+            Message::RunCanvasHtml(msg_idx, art_idx) => {
+                if let Some(art) = self
+                    .messages
+                    .get(msg_idx)
+                    .and_then(|m| m.artifacts.get(art_idx))
+                {
+                    match write_and_open_canvas_html(&art.title, &art.content) {
+                        Ok(_) => {
+                            self.show_toast(if self.locale.is_en() {
+                                "Opened Canvas HTML in browser"
+                            } else {
+                                "브라우저에서 Canvas HTML을 열었습니다"
+                            });
+                        }
+                        Err(e) => {
+                            self.error_banner = Some(if self.locale.is_en() {
+                                format!("Failed to launch Canvas HTML: {e}")
+                            } else {
+                                format!("Canvas HTML 실행 실패: {e}")
+                            });
+                        }
+                    }
+                }
+                Task::none()
+            }
             Message::OpenFilePicker => {
                 self.model_menu_open = false;
                 Task::perform(filepicker::pick_files(), Message::FilesPicked)
@@ -2674,6 +2666,9 @@ impl App {
             if !ch.status_text.is_empty() {
                 last.status_text = ch.status_text.clone();
             }
+            if !ch.artifacts.is_empty() {
+                last.artifacts = ch.artifacts.clone();
+            }
             for act in &ch.tool_activities {
                 let exists = last.tool_activities.iter_mut().find(|existing| {
                     (!act.id.is_empty() && existing.id == act.id)
@@ -2714,7 +2709,12 @@ impl App {
             })
             .into();
 
-        if self.search_modal_open {
+        if let Some((msg_idx, art_idx, art)) = &self.canvas_preview {
+            stack![base, self.view_canvas_preview_modal(*msg_idx, *art_idx, art)]
+                .width(Fill)
+                .height(Fill)
+                .into()
+        } else if self.search_modal_open {
             stack![base, self.view_search_modal()]
                 .width(Fill)
                 .height(Fill)
@@ -3762,15 +3762,53 @@ impl App {
 
     fn view_chat_messages(&self) -> Element<'_, Message> {
         let pal = &self.palette;
-        let mut items: Vec<Element<'_, Message>> = self
-            .messages
-            .iter()
-            .enumerate()
-            .map(|(idx, msg)| {
-                let is_last = idx + 1 == self.messages.len();
-                self.view_message(idx, msg, is_last)
-            })
-            .collect();
+        let text_muted = pal.text_muted;
+        let border_subtle = pal.border_subtle;
+        let mut items: Vec<Element<'_, Message>> = Vec::with_capacity(self.messages.len() + 4);
+        let mut last_header_ts: i64 = 0;
+
+        for (idx, msg) in self.messages.iter().enumerate() {
+            let ts = msg.timestamp_unix;
+            if ts > 0 {
+                let show_header = last_header_ts == 0
+                    || (ts != last_header_ts
+                        && (msg.is_scheduled_run
+                            || (ts - last_header_ts).abs() >= 3600
+                            || local_day_number(ts, self.local_tz_offset_secs)
+                                != local_day_number(last_header_ts, self.local_tz_offset_secs)));
+                if show_header {
+                    let label = format_turn_timestamp(ts, self.local_tz_offset_secs, self.locale);
+                    let line_left = container(space::horizontal())
+                        .width(Fill)
+                        .height(Length::Fixed(1.0))
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(border_subtle)),
+                            ..container::Style::default()
+                        });
+                    let line_right = container(space::horizontal())
+                        .width(Fill)
+                        .height(Length::Fixed(1.0))
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(border_subtle)),
+                            ..container::Style::default()
+                        });
+                    items.push(
+                        row![
+                            line_left,
+                            text(label).size(11.5).color(text_muted),
+                            line_right,
+                        ]
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .width(Fill)
+                        .into(),
+                    );
+                    last_header_ts = ts;
+                }
+            }
+            let is_last = idx + 1 == self.messages.len();
+            items.push(self.view_message(idx, msg, is_last));
+        }
 
         items.push(space::vertical().height(Length::Fixed(16.0)).into());
 
@@ -3781,7 +3819,7 @@ impl App {
                     .spacing(22)
                     .padding(Padding {
                         top: 10.0,
-                        right: 24.0,
+                        right: 28.0,
                         bottom: 12.0,
                         left: 24.0,
                     })
@@ -4533,6 +4571,213 @@ impl App {
             .width(Fill)
             .height(Fill)
             .into()
+    }
+
+    /// Canvas 아티팩트 소스 코드 프리뷰 모달.
+    fn view_canvas_preview_modal<'a>(
+        &'a self,
+        msg_idx: usize,
+        art_idx: usize,
+        art: &'a TurnArtifact,
+    ) -> Element<'a, Message> {
+        let loc = self.locale;
+        let pal = &self.palette;
+        let bg_popover = pal.bg_popover;
+        let bg_code = pal.bg_code;
+        let bg_chip = pal.bg_chip;
+        let bg_hover = pal.bg_hover;
+        let border_subtle = pal.border_subtle;
+        let text_primary = pal.text_primary;
+        let text_strong = pal.text_strong;
+        let text_secondary = pal.text_secondary;
+        let accent = pal.accent;
+        let accent_soft = pal.accent_soft;
+
+        let backdrop = mouse_area(
+            container(space::horizontal())
+                .width(Fill)
+                .height(Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.35))),
+                    ..container::Style::default()
+                }),
+        )
+        .on_press(Message::CloseCanvasPreview);
+
+        let title_str = if art.title.trim().is_empty() {
+            t(loc, "Canvas 문서")
+        } else {
+            art.title.trim()
+        };
+
+        let mut header = row![
+            Icon::Canvas.view(18.0, accent),
+            text(title_str)
+                .size(16)
+                .font(font_semibold())
+                .color(text_strong),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        if !art.language.is_empty() {
+            header = header.push(
+                container(
+                    text(art.language.to_uppercase())
+                        .size(11)
+                        .font(font_medium())
+                        .color(text_secondary),
+                )
+                .padding([2, 8])
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(bg_chip)),
+                    border: Border {
+                        radius: 8.0.into(),
+                        ..Border::default()
+                    },
+                    ..container::Style::default()
+                }),
+            );
+        }
+
+        header = header.push(space::horizontal());
+
+        if !art.content.is_empty() {
+            header = header.push(
+                button(
+                    row![
+                        Icon::Copy.view(13.0, text_secondary),
+                        text(t(loc, "코드 복사")).size(12).color(text_secondary),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(Message::CopyText(art.content.clone()))
+                .padding([5, 10])
+                .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 8.0)),
+            );
+        }
+
+        if is_html_artifact(art) && !art.content.is_empty() {
+            header = header.push(
+                button(
+                    row![
+                        Icon::Play.view(13.0, accent),
+                        text(t(loc, "브라우저에서 실행"))
+                            .size(12)
+                            .font(font_medium())
+                            .color(accent),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(Message::RunCanvasHtml(msg_idx, art_idx))
+                .padding([5, 10])
+                .style(move |_, status| {
+                    let hovered = matches!(status, button::Status::Hovered);
+                    button::Style {
+                        background: Some(Background::Color(if hovered {
+                            bg_hover
+                        } else {
+                            accent_soft
+                        })),
+                        text_color: accent,
+                        border: Border {
+                            radius: 8.0.into(),
+                            ..Border::default()
+                        },
+                        ..button::Style::default()
+                    }
+                }),
+            );
+        } else if !art.url.is_empty() {
+            header = header.push(
+                button(
+                    row![
+                        Icon::Share.view(13.0, accent),
+                        text(t(loc, "웹에서 열기"))
+                            .size(12)
+                            .font(font_medium())
+                            .color(accent),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(Message::OpenExternalUrl(art.url.clone()))
+                .padding([5, 10])
+                .style(move |_, status| ghost_btn_style(status, bg_hover, accent, 8.0)),
+            );
+        }
+
+        header = header.push(
+            button(container(Icon::Close.view(15.0, text_secondary)).center(Fill))
+                .on_press(Message::CloseCanvasPreview)
+                .padding(0)
+                .width(Length::Fixed(30.0))
+                .height(Length::Fixed(30.0))
+                .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 15.0)),
+        );
+
+        let pal_scroll = self.palette.clone();
+        let code_body = container(
+            scrollable(
+                container(
+                    text(&art.content)
+                        .size(12.5)
+                        .font(iced::Font::MONOSPACE)
+                        .line_height(text::LineHeight::Relative(1.52))
+                        .color(text_primary),
+                )
+                .padding([14, 16]),
+            )
+            .width(Fill)
+            .height(Fill)
+            .direction(scrollable::Direction::Both {
+                vertical: scrollable::Scrollbar::default().width(6).scroller_width(6),
+                horizontal: scrollable::Scrollbar::default().width(6).scroller_width(6),
+            })
+            .style(move |_, status| pal_scroll.subtle_scrollable_style(status)),
+        )
+        .width(Fill)
+        .height(Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(bg_code)),
+            border: Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: border_subtle,
+            },
+            ..container::Style::default()
+        });
+
+        let modal_card = container(column![header, code_body].spacing(12).width(Fill).height(Fill))
+            .padding(18)
+            .max_width(880.0)
+            .width(Fill)
+            .height(Length::Fixed(640.0))
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg_popover)),
+                border: Border {
+                    radius: 18.0.into(),
+                    width: 1.0,
+                    color: border_subtle,
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                    offset: Vector::new(0.0, 12.0),
+                    blur_radius: 32.0,
+                },
+                ..container::Style::default()
+            });
+
+        let centered = container(modal_card)
+            .padding(24)
+            .center_x(Fill)
+            .center_y(Fill)
+            .width(Fill)
+            .height(Fill);
+
+        stack![backdrop, centered].width(Fill).height(Fill).into()
     }
 
     /// 설정 모달 (`⚙`): 계정 프로필 · 이 PC 원격 제어(ON/OFF·허용 폴더·MCP·실행 로그) · 등록 기기 · 단축키.
@@ -5790,7 +6035,92 @@ impl App {
             Role::User => {
                 let mut col = column![].spacing(6).align_x(Alignment::End);
 
-                if !msg.attachments.is_empty() {
+                if !msg.attachment_items.is_empty() {
+                    let mut thumb_items: Vec<Element<'_, Message>> = Vec::new();
+                    let mut chip_items: Vec<Element<'_, Message>> = Vec::new();
+                    for att in &msg.attachment_items {
+                        let key = markdown_view::turn_attachment_cache_key(&att.url);
+                        if is_attachment_image(att)
+                            && let Some(handle) = self.library_image_cache.get(&key)
+                        {
+                            let thumb_img = image(handle.clone())
+                                .content_fit(ContentFit::Cover)
+                                .width(Length::Fixed(88.0))
+                                .height(Length::Fixed(88.0));
+                            let thumb_card = container(thumb_img)
+                                .clip(true)
+                                .style(move |_| container::Style {
+                                    background: Some(Background::Color(bg_chip)),
+                                    border: Border {
+                                        radius: 12.0.into(),
+                                        width: 1.0,
+                                        color: border_subtle,
+                                    },
+                                    ..container::Style::default()
+                                });
+                            if !att.url.is_empty() {
+                                thumb_items.push(
+                                    button(thumb_card)
+                                        .on_press(Message::OpenExternalUrl(att.url.clone()))
+                                        .padding(0)
+                                        .style(move |_, status| {
+                                            ghost_btn_style(status, bg_hover, text_primary, 12.0)
+                                        })
+                                        .into(),
+                                );
+                            } else {
+                                thumb_items.push(thumb_card.into());
+                            }
+                        } else {
+                            let label = if !att.name.is_empty() {
+                                att.name.as_str()
+                            } else if is_attachment_image(att) {
+                                t(loc, "이미지")
+                            } else {
+                                t(loc, "첨부 파일")
+                            };
+                            let icon = if is_attachment_image(att) {
+                                Icon::Image.view(12.0, text_secondary)
+                            } else {
+                                Icon::AttachFile.view(12.0, text_secondary)
+                            };
+                            let chip = container(
+                                row![icon, text(label).size(12).color(text_secondary)]
+                                    .spacing(5)
+                                    .align_y(Alignment::Center),
+                            )
+                            .padding([4, 10])
+                            .style(move |_| container::Style {
+                                background: Some(Background::Color(bg_chip)),
+                                border: Border {
+                                    radius: 12.0.into(),
+                                    width: 1.0,
+                                    color: border_subtle,
+                                },
+                                ..container::Style::default()
+                            });
+                            if !att.url.is_empty() {
+                                chip_items.push(
+                                    button(chip)
+                                        .on_press(Message::OpenExternalUrl(att.url.clone()))
+                                        .padding(0)
+                                        .style(move |_, status| {
+                                            ghost_btn_style(status, bg_hover, text_secondary, 12.0)
+                                        })
+                                        .into(),
+                                );
+                            } else {
+                                chip_items.push(chip.into());
+                            }
+                        }
+                    }
+                    if !thumb_items.is_empty() {
+                        col = col.push(row(thumb_items).spacing(8));
+                    }
+                    if !chip_items.is_empty() {
+                        col = col.push(row(chip_items).spacing(6));
+                    }
+                } else if !msg.attachments.is_empty() {
                     let chips: Vec<Element<'_, Message>> = msg
                         .attachments
                         .iter()
@@ -5819,41 +6149,44 @@ impl App {
                     col = col.push(row(chips).spacing(6));
                 }
 
-                let bubble = container(
-                    text(&msg.raw_text)
-                        .size(15)
-                        .color(text_primary)
-                        .wrapping(text::Wrapping::WordOrGlyph),
-                )
-                .padding([12, 18])
-                .max_width(580.0)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(bg_user)),
-                    border: Border {
-                        radius: iced::border::Radius {
-                            top_left: 20.0,
-                            top_right: 6.0,
-                            bottom_right: 20.0,
-                            bottom_left: 20.0,
+                if !msg.raw_text.is_empty() {
+                    let bubble = container(
+                        text(&msg.raw_text)
+                            .size(15)
+                            .line_height(text::LineHeight::Relative(1.58))
+                            .color(text_primary)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                    )
+                    .padding([12, 18])
+                    .max_width(580.0)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(bg_user)),
+                        border: Border {
+                            radius: iced::border::Radius {
+                                top_left: 20.0,
+                                top_right: 6.0,
+                                bottom_right: 20.0,
+                                bottom_left: 20.0,
+                            },
+                            ..Border::default()
                         },
-                        ..Border::default()
-                    },
-                    ..container::Style::default()
-                });
+                        ..container::Style::default()
+                    });
 
-                let copy_btn = button(
-                    row![
-                        Icon::Copy.view(12.0, text_muted),
-                        text(t(loc, "복사")).size(11).color(text_muted),
-                    ]
-                    .spacing(4)
-                    .align_y(Alignment::Center),
-                )
-                .on_press(Message::CopyText(msg.raw_text.clone()))
-                .padding([3, 8])
-                .style(move |_, status| ghost_btn_style(status, bg_hover, text_muted, 8.0));
+                    let copy_btn = button(
+                        row![
+                            Icon::Copy.view(12.0, text_muted),
+                            text(t(loc, "복사")).size(11).color(text_muted),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::CopyText(msg.raw_text.clone()))
+                    .padding([3, 8])
+                    .style(move |_, status| ghost_btn_style(status, bg_hover, text_muted, 8.0));
 
-                col = col.push(bubble).push(copy_btn);
+                    col = col.push(bubble).push(copy_btn);
+                }
                 row![space::horizontal(), col].width(Fill).into()
             }
             Role::Model => {
@@ -5861,7 +6194,42 @@ impl App {
                 let accent = pal.accent;
                 let accent_soft = pal.accent_soft;
                 let success = pal.success;
+                let warning = pal.warning;
                 let mut content = column![].spacing(10).width(Fill);
+
+                if msg.is_scheduled_run {
+                    let sched_text = if msg.scheduled_title.trim().is_empty() {
+                        t(loc, "예약 실행됨").to_string()
+                    } else {
+                        format!(
+                            "{} · {}",
+                            t(loc, "예약 실행됨"),
+                            msg.scheduled_title.trim()
+                        )
+                    };
+                    let sched_banner = container(
+                        row![
+                            Icon::Clock.view(13.0, accent),
+                            text(sched_text)
+                                .size(12)
+                                .font(font_medium())
+                                .color(accent),
+                        ]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding([5, 11])
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(accent_soft)),
+                        border: Border {
+                            radius: 12.0.into(),
+                            width: 1.0,
+                            color: border_subtle,
+                        },
+                        ..container::Style::default()
+                    });
+                    content = content.push(sched_banner);
+                }
 
                 let mut header = row![sparkle_color(17.0)]
                     .spacing(8)
@@ -5943,113 +6311,191 @@ impl App {
                 }
                 content = content.push(header);
 
-                // 원격 PC 도구 실행 및 진행 상태 카드
+                // 원격 PC 도구 실행 및 진행 상태 카드 (완료 턴은 기본 1줄 접힘, 클릭 시 펼침)
                 let live_tool_running =
                     is_streaming_here && !self.remote_status.current_tool.is_empty();
-                if live_tool_running
+                let has_tools = live_tool_running
                     || !msg.tool_activities.is_empty()
-                    || !msg.status_text.is_empty()
-                {
-                    let mut activity_col = column![].spacing(6).width(Fill);
-                    if live_tool_running {
-                        let args_part = if !self.remote_status.current_tool_args.is_empty() {
-                            format!(
-                                " ({})",
-                                truncate_single_line(&self.remote_status.current_tool_args, 46)
-                            )
+                    || !msg.status_text.is_empty();
+                if has_tools {
+                    let show_tools_expanded = live_tool_running || msg.tools_expanded;
+                    let summary_label: String = if !msg.tool_activities.is_empty() {
+                        if loc.is_en() {
+                            let n = msg.tool_activities.len();
+                            if n == 1 {
+                                "Used 1 tool".into()
+                            } else {
+                                format!("Used {n} tools")
+                            }
                         } else {
-                            String::new()
-                        };
-                        activity_col = activity_col.push(
+                            format!("도구 {}건 사용", msg.tool_activities.len())
+                        }
+                    } else if !msg.status_text.is_empty() {
+                        truncate_single_line(msg.status_text.trim(), 52)
+                    } else {
+                        t(loc, "도구 활동 표시").to_string()
+                    };
+
+                    if !show_tools_expanded {
+                        let toggle_row = button(
                             row![
-                                container(space::horizontal())
-                                    .width(Length::Fixed(7.0))
-                                    .height(Length::Fixed(7.0))
-                                    .style(move |_| container::Style {
-                                        background: Some(Background::Color(accent)),
-                                        border: Border {
-                                            radius: 4.0.into(),
-                                            ..Border::default()
-                                        },
-                                        ..container::Style::default()
-                                    }),
-                                text(if loc.is_en() {
-                                    format!(
-                                        "Running: {}{}",
-                                        self.remote_status.current_tool, args_part
-                                    )
-                                } else {
-                                    format!(
-                                        "실행 중: {}{}",
-                                        self.remote_status.current_tool, args_part
-                                    )
-                                })
-                                .size(12.5)
-                                .font(font_medium())
-                                .color(accent),
-                            ]
-                            .spacing(7)
-                            .align_y(Alignment::Center),
-                        );
-                    }
-                    for act in &msg.tool_activities {
-                        let title = if !act.name.is_empty() {
-                            act.name.as_str()
-                        } else {
-                            t(loc, "원격 도구 실행")
-                        };
-                        let detail = if !act.explanation.is_empty() {
-                            act.explanation.as_str()
-                        } else if !act.summary.is_empty() {
-                            act.summary.as_str()
-                        } else {
-                            act.action.as_str()
-                        };
-                        let mut act_row = row![
-                            Icon::Check.view(13.0, success),
-                            text(title)
-                                .size(12.5)
-                                .font(font_medium())
-                                .color(text_primary),
-                        ]
-                        .spacing(6)
-                        .align_y(Alignment::Center);
-                        if !detail.is_empty() {
-                            act_row = act_row.push(
-                                text(truncate_single_line(detail, 58))
+                                Icon::Check.view(13.0, success),
+                                text(summary_label)
                                     .size(12.0)
+                                    .font(font_medium())
                                     .color(text_secondary),
+                                Icon::ChevronDown.view(13.5, text_muted),
+                            ]
+                            .spacing(6)
+                            .align_y(Alignment::Center),
+                        )
+                        .on_press(Message::ToggleMessageTools(idx))
+                        .padding([5, 11])
+                        .style(move |_, status| {
+                            let hovered = matches!(status, button::Status::Hovered);
+                            button::Style {
+                                background: Some(Background::Color(if hovered {
+                                    bg_hover
+                                } else {
+                                    bg_thought
+                                })),
+                                text_color: text_secondary,
+                                border: Border {
+                                    radius: 11.0.into(),
+                                    width: 1.0,
+                                    color: border_subtle,
+                                },
+                                ..button::Style::default()
+                            }
+                        });
+                        content = content.push(toggle_row);
+                    } else {
+                        let mut activity_col = column![].spacing(6).width(Fill);
+                        if !live_tool_running {
+                            let collapse_btn = button(
+                                row![
+                                    Icon::Check.view(13.0, success),
+                                    text(summary_label)
+                                        .size(12.0)
+                                        .font(font_medium())
+                                        .color(text_secondary),
+                                    space::horizontal(),
+                                    text(t(loc, "도구 활동 숨기기")).size(11.5).color(text_muted),
+                                    Icon::ChevronUp.view(13.5, text_muted),
+                                ]
+                                .spacing(6)
+                                .align_y(Alignment::Center)
+                                .width(Fill),
+                            )
+                            .on_press(Message::ToggleMessageTools(idx))
+                            .padding([2, 4])
+                            .width(Fill)
+                            .style(move |_, status| {
+                                ghost_btn_style(status, bg_hover, text_secondary, 8.0)
+                            });
+                            activity_col = activity_col.push(collapse_btn);
+                        }
+                        if live_tool_running {
+                            let args_part = if !self.remote_status.current_tool_args.is_empty() {
+                                format!(
+                                    " ({})",
+                                    truncate_single_line(&self.remote_status.current_tool_args, 46)
+                                )
+                            } else {
+                                String::new()
+                            };
+                            activity_col = activity_col.push(
+                                row![
+                                    container(space::horizontal())
+                                        .width(Length::Fixed(7.0))
+                                        .height(Length::Fixed(7.0))
+                                        .style(move |_| container::Style {
+                                            background: Some(Background::Color(accent)),
+                                            border: Border {
+                                                radius: 4.0.into(),
+                                                ..Border::default()
+                                            },
+                                            ..container::Style::default()
+                                        }),
+                                    text(if loc.is_en() {
+                                        format!(
+                                            "Running: {}{}",
+                                            self.remote_status.current_tool, args_part
+                                        )
+                                    } else {
+                                        format!(
+                                            "실행 중: {}{}",
+                                            self.remote_status.current_tool, args_part
+                                        )
+                                    })
+                                    .size(12.5)
+                                    .font(font_medium())
+                                    .color(accent),
+                                ]
+                                .spacing(7)
+                                .align_y(Alignment::Center),
                             );
                         }
-                        activity_col = activity_col.push(act_row);
+                        for act in &msg.tool_activities {
+                            let title = if !act.name.is_empty() {
+                                act.name.as_str()
+                            } else {
+                                t(loc, "원격 도구 실행")
+                            };
+                            let detail = if !act.explanation.is_empty() {
+                                act.explanation.as_str()
+                            } else if !act.summary.is_empty() {
+                                act.summary.as_str()
+                            } else {
+                                act.action.as_str()
+                            };
+                            let mut act_row = row![
+                                Icon::Check.view(13.0, success),
+                                text(title)
+                                    .size(12.5)
+                                    .font(font_medium())
+                                    .color(text_primary),
+                            ]
+                            .spacing(6)
+                            .align_y(Alignment::Center);
+                            if !detail.is_empty() {
+                                act_row = act_row.push(
+                                    text(truncate_single_line(detail, 58))
+                                        .size(12.0)
+                                        .color(text_secondary),
+                                );
+                            }
+                            activity_col = activity_col.push(act_row);
+                        }
+                        if !msg.status_text.is_empty() {
+                            activity_col = activity_col.push(
+                                text(msg.status_text.trim())
+                                    .size(12.5)
+                                    .color(text_secondary)
+                                    .wrapping(text::Wrapping::WordOrGlyph),
+                            );
+                        }
+                        let activity_card = container(activity_col)
+                            .padding([10, 14])
+                            .width(Fill)
+                            .style(move |_| container::Style {
+                                background: Some(Background::Color(bg_thought)),
+                                border: Border {
+                                    radius: 12.0.into(),
+                                    width: 1.0,
+                                    color: border_subtle,
+                                },
+                                ..container::Style::default()
+                            });
+                        content = content.push(activity_card);
                     }
-                    if !msg.status_text.is_empty() {
-                        activity_col = activity_col.push(
-                            text(msg.status_text.trim())
-                                .size(12.5)
-                                .color(text_secondary)
-                                .wrapping(text::Wrapping::WordOrGlyph),
-                        );
-                    }
-                    let activity_card = container(activity_col)
-                        .padding([10, 14])
-                        .width(Fill)
-                        .style(move |_| container::Style {
-                            background: Some(Background::Color(bg_thought)),
-                            border: Border {
-                                radius: 12.0.into(),
-                                width: 1.0,
-                                color: border_subtle,
-                            },
-                            ..container::Style::default()
-                        });
-                    content = content.push(activity_card);
                 }
 
                 if msg.thoughts_expanded && !msg.thoughts.is_empty() {
                     let thought_box = container(
                         text(&msg.thoughts)
                             .size(13)
+                            .line_height(text::LineHeight::Relative(1.58))
                             .color(text_secondary)
                             .wrapping(text::Wrapping::WordOrGlyph),
                     )
@@ -6067,7 +6513,11 @@ impl App {
                     content = content.push(thought_box);
                 }
 
-                if msg.raw_text.is_empty() && is_streaming_here {
+                let has_body = !msg.raw_text.is_empty()
+                    || !msg.generated_images.is_empty()
+                    || !msg.artifacts.is_empty();
+
+                if !has_body && is_streaming_here {
                     let waiting_msg = if live_tool_running || !msg.tool_activities.is_empty() {
                         t(loc, "원격 PC 실행 결과를 정리하는 중...")
                     } else {
@@ -6078,17 +6528,45 @@ impl App {
                             .size(14)
                             .color(text_secondary),
                     );
-                } else {
-                    let viewer = GeminiMarkdownViewer {
-                        palette: self.palette.clone(),
-                        locale: loc,
-                    };
-                    let md_view = markdown::view_with(
-                        msg.markdown.items(),
+                } else if has_body {
+                    let md_view = markdown_view::view(
+                        &msg.markdown,
                         self.palette.markdown_settings(),
-                        &viewer,
+                        self.palette.clone(),
+                        loc,
+                        markdown_view::RenderContext {
+                            message_idx: idx,
+                            generated_images: &msg.generated_images,
+                            artifacts: &msg.artifacts,
+                            image_cache: &self.library_image_cache,
+                        },
                     );
                     content = content.push(md_view);
+                }
+
+                if msg.aborted && !is_streaming_here {
+                    let aborted_badge = container(
+                        row![
+                            Icon::Stop.view(12.5, warning),
+                            text(t(loc, "응답 생성이 중단되었습니다"))
+                                .size(12.0)
+                                .font(font_medium())
+                                .color(warning),
+                        ]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding([5, 11])
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(bg_thought)),
+                        border: Border {
+                            radius: 10.0.into(),
+                            width: 1.0,
+                            color: border_subtle,
+                        },
+                        ..container::Style::default()
+                    });
+                    content = content.push(aborted_badge);
                 }
 
                 if !is_streaming_here && !msg.raw_text.is_empty() {
@@ -6318,9 +6796,187 @@ fn format_reset_time(reset_unix: i64, loc: Locale) -> String {
     }
 }
 
+/// 첨부 메타데이터가 이미지 형식인지 판별한다.
+fn is_attachment_image(att: &TurnAttachment) -> bool {
+    if att.mime_type.to_ascii_lowercase().starts_with("image/") {
+        return true;
+    }
+    if att.width > 0 && att.height > 0 {
+        return true;
+    }
+    let lower_name = att.name.to_ascii_lowercase();
+    lower_name.ends_with(".png")
+        || lower_name.ends_with(".jpg")
+        || lower_name.ends_with(".jpeg")
+        || lower_name.ends_with(".webp")
+        || lower_name.ends_with(".gif")
+        || att.url.contains("lh3.googleusercontent.com/")
+}
+
+/// Canvas 아티팩트가 브라우저에서 바로 실행 가능한 HTML 문서인지 판별한다.
+fn is_html_artifact(art: &TurnArtifact) -> bool {
+    let lang = art.language.trim().to_ascii_lowercase();
+    if lang == "html" || lang == "htm" {
+        return true;
+    }
+    let head = art.content.trim_start().to_ascii_lowercase();
+    head.starts_with("<!doctype html") || head.starts_with("<html")
+}
+
+/// Canvas HTML 아티팩트를 사용자 전용 임시 디렉터리에 저장하고 기본 브라우저로 연다.
+fn write_and_open_canvas_html(title: &str, content: &str) -> Result<PathBuf, String> {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join("gemini-ui-canvas");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+
+    let slug: String = title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .take(36)
+        .collect();
+    let safe_slug = if slug.trim_matches('_').is_empty() {
+        "canvas".to_string()
+    } else {
+        slug
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = dir.join(format!("{safe_slug}_{}_{nanos}.html", std::process::id()));
+    fs::write(&path, content).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+
+    std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// 시스템 로컬 타임존 UTC 오프셋(초)을 부팅 시 1회 조회한다.
+fn detect_local_tz_offset_secs() -> i64 {
+    std::process::Command::new("date")
+        .arg("+%z")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .and_then(|s| parse_tz_offset_hhmm(s.trim()))
+        .unwrap_or(0)
+}
+
+fn parse_tz_offset_hhmm(s: &str) -> Option<i64> {
+    if s.len() != 5 {
+        return None;
+    }
+    let sign = match s.as_bytes()[0] {
+        b'+' => 1i64,
+        b'-' => -1i64,
+        _ => return None,
+    };
+    let hours: i64 = s[1..3].parse().ok()?;
+    let mins: i64 = s[3..5].parse().ok()?;
+    if hours > 14 || mins >= 60 {
+        return None;
+    }
+    Some(sign * (hours * 3600 + mins * 60))
+}
+
+fn local_day_number(unix_secs: i64, tz_offset_secs: i64) -> i64 {
+    (unix_secs + tz_offset_secs).div_euclid(86_400)
+}
+
+/// 유닉스 일수(1970-01-01 = 0)를 그레고리력 `(년, 월, 일)`로 변환한다 (Howard Hinnant 알고리즘).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = y + i64::from(m <= 2);
+    (year, m, d)
+}
+
+/// 대화 턴 타임스탬프를 현재 로케일·로컬 시간대 기준의 날짜/시각 라벨로 변환한다.
+fn format_turn_timestamp(unix_secs: i64, tz_offset_secs: i64, loc: Locale) -> String {
+    let local = unix_secs + tz_offset_secs;
+    let day = local.div_euclid(86_400);
+    let sec_of_day = local.rem_euclid(86_400);
+    let hour24 = (sec_of_day / 3600) as u32;
+    let minute = ((sec_of_day % 3600) / 60) as u32;
+    let (year, month, dom) = civil_from_days(day);
+
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(unix_secs);
+    let today_day = local_day_number(now_unix, tz_offset_secs);
+    let (now_year, _, _) = civil_from_days(today_day);
+
+    if loc.is_en() {
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let (ampm, h12) = if hour24 == 0 {
+            ("AM", 12)
+        } else if hour24 < 12 {
+            ("AM", hour24)
+        } else if hour24 == 12 {
+            ("PM", 12)
+        } else {
+            ("PM", hour24 - 12)
+        };
+        let date_part = if day == today_day {
+            "Today".to_string()
+        } else if day + 1 == today_day {
+            "Yesterday".to_string()
+        } else {
+            let mon = MONTHS[(month.saturating_sub(1) as usize).min(11)];
+            if year == now_year {
+                format!("{mon} {dom}")
+            } else {
+                format!("{mon} {dom}, {year}")
+            }
+        };
+        format!("{date_part} · {h12}:{minute:02} {ampm}")
+    } else {
+        let (ampm, h12) = if hour24 == 0 {
+            ("오전", 12)
+        } else if hour24 < 12 {
+            ("오전", hour24)
+        } else if hour24 == 12 {
+            ("오후", 12)
+        } else {
+            ("오후", hour24 - 12)
+        };
+        let date_part = if day == today_day {
+            "오늘".to_string()
+        } else if day + 1 == today_day {
+            "어제".to_string()
+        } else if year == now_year {
+            format!("{month}월 {dom}일")
+        } else {
+            format!("{year}년 {month}월 {dom}일")
+        };
+        format!("{date_part} · {ampm} {h12}:{minute:02}")
+    }
+}
+
 #[cfg(test)]
 mod url_safety_tests {
-    use super::is_safe_external_url;
+    use super::{
+        Locale, civil_from_days, format_turn_timestamp, is_safe_external_url, parse_tz_offset_hhmm,
+    };
 
     #[test]
     fn allows_only_http_and_https_schemes() {
@@ -6331,5 +6987,21 @@ mod url_safety_tests {
         assert!(!is_safe_external_url("ssh://user@host"));
         assert!(!is_safe_external_url("https://example.com\nmalicious"));
         assert!(!is_safe_external_url(""));
+    }
+
+    #[test]
+    fn 타임존_오프셋과_그레고리력_타임스탬프_포맷() {
+        assert_eq!(parse_tz_offset_hhmm("+0900"), Some(32_400));
+        assert_eq!(parse_tz_offset_hhmm("-0530"), Some(-19_800));
+        assert_eq!(parse_tz_offset_hhmm("invalid"), None);
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(20_555), (2026, 4, 12));
+
+        // 2024-03-15 05:30:00 UTC == KST(+0900) 2024-03-15 14:30 (오후 2:30)
+        let ts = 1_710_480_600i64;
+        let ko = format_turn_timestamp(ts, 32_400, Locale::Ko);
+        let en = format_turn_timestamp(ts, 32_400, Locale::En);
+        assert!(ko.contains("2024년 3월 15일") && ko.contains("오후 2:30"), "ko={ko}");
+        assert!(en.contains("Mar 15, 2024") && en.contains("2:30 PM"), "en={en}");
     }
 }

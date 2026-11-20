@@ -26,6 +26,14 @@ pub fn font_semibold() -> Font {
     }
 }
 
+pub fn font_bold() -> Font {
+    Font {
+        family: Family::Name("Noto Sans CJK KR"),
+        weight: Weight::Bold,
+        ..Font::DEFAULT
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
     #[default]
@@ -524,6 +532,11 @@ impl AppTheme {
     }
 
     pub fn markdown_settings(&self) -> markdown::Settings {
+        let link_color = if self.is_dark {
+            self.accent
+        } else {
+            mix(self.accent, self.text_primary, 0.14)
+        };
         let style = markdown::Style {
             font: font_regular(),
             inline_code_highlight: markdown::Highlight {
@@ -539,15 +552,17 @@ impl AppTheme {
             inline_code_color: self.text_inline_code,
             inline_code_font: Font::MONOSPACE,
             code_block_font: Font::MONOSPACE,
-            link_color: self.accent,
+            link_color,
         };
         let mut settings = markdown::Settings::with_text_size(15.0, style);
-        settings.h1_size = 24.0.into();
-        settings.h2_size = 20.0.into();
-        settings.h3_size = 17.0.into();
-        settings.h4_size = 16.0.into();
+        settings.h1_size = 22.0.into();
+        settings.h2_size = 19.0.into();
+        settings.h3_size = 16.5.into();
+        settings.h4_size = 15.5.into();
+        settings.h5_size = 14.5.into();
+        settings.h6_size = 14.0.into();
         settings.code_size = 13.0.into();
-        settings.spacing = 12.0.into();
+        settings.spacing = 14.0.into();
         settings
     }
 }

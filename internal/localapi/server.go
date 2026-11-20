@@ -659,7 +659,85 @@ func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	s.enrichGeneratedImages(r.Context(), convID, res.Turns)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// enrichGeneratedImages는 image_generation_content 플레이스홀더가 포함된 턴에
+// 서버 미디어 아티팩트의 실제 생성 이미지 URL을 매칭해 채운다.
+func (s *Server) enrichGeneratedImages(ctx context.Context, convID string, turns []proto.ConversationTurn) {
+	if s.robinCli == nil || len(turns) == 0 {
+		return
+	}
+	needEnrich := false
+	for i := range turns {
+		if len(turns[i].GeneratedImages) == 0 &&
+			strings.Contains(turns[i].ModelText, "googleusercontent.com/image_generation_content/") {
+			needEnrich = true
+			break
+		}
+	}
+	if !needEnrich {
+		return
+	}
+	media, err := s.robinCli.ListGeminiMediaArtifacts(ctx, 80)
+	if err != nil || len(media) == 0 {
+		return
+	}
+	var convMedia []proto.AppArtifact
+	for _, m := range media {
+		if m.ConversationID == convID && m.URL != "" {
+			convMedia = append(convMedia, m)
+		}
+	}
+	if len(convMedia) == 0 {
+		return
+	}
+
+	used := make([]bool, len(convMedia))
+	// 1차: ResponseID / RequestID 정확 매칭
+	for i := range turns {
+		t := &turns[i]
+		if !strings.Contains(t.ModelText, "googleusercontent.com/image_generation_content/") {
+			continue
+		}
+		for mi, m := range convMedia {
+			if used[mi] {
+				continue
+			}
+			if (m.ResponseID != "" && m.ResponseID == t.ResponseID) ||
+				(m.RequestID != "" && m.RequestID == t.RequestID) {
+				t.GeneratedImages = append(t.GeneratedImages, proto.GeneratedImage{
+					URL:   m.URL,
+					Title: m.Title,
+				})
+				used[mi] = true
+			}
+		}
+	}
+	// 2차: ID가 일치하지 않은 남은 플레이스홀더 턴은 생성 시각 근접 매칭(±180초)
+	for i := range turns {
+		t := &turns[i]
+		if len(t.GeneratedImages) > 0 || !strings.Contains(t.ModelText, "googleusercontent.com/image_generation_content/") {
+			continue
+		}
+		for mi, m := range convMedia {
+			if used[mi] {
+				continue
+			}
+			diff := m.CreatedAtUnix - t.TimestampUnix
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff <= 180 || len(convMedia) == 1 {
+				t.GeneratedImages = append(t.GeneratedImages, proto.GeneratedImage{
+					URL:   m.URL,
+					Title: m.Title,
+				})
+				used[mi] = true
+			}
+		}
+	}
 }
 
 func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request) {

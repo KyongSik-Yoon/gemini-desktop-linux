@@ -123,3 +123,97 @@ func TestEncodeProcessQueryFramesAndDecodeResponse(t *testing.T) {
 		t.Fatalf("디코딩 결과 불일치: %+v", c)
 	}
 }
+
+func TestDecodeConversationTurnRichFields(t *testing.T) {
+	// 사용자 첨부 이미지 (SavedUserQuery.f5.f4)
+	dim := NewBuilder()
+	dim.AppendInt32(1, 485)
+	dim.AppendInt32(2, 1000)
+
+	attItem := NewBuilder()
+	attItem.AppendString(3, "sample.jpg")
+	attItem.AppendString(4, "https://lh3.googleusercontent.com/gg/sample")
+	attItem.AppendString(12, "image/jpeg")
+	attItem.AppendMessage(16, dim.Bytes())
+
+	attList := NewBuilder()
+	attList.AppendMessage(4, attItem.Bytes())
+
+	uq := NewBuilder()
+	uq.AppendString(1, "이미지 편집해줘")
+	uq.AppendMessage(5, attList.Bytes())
+
+	savedReq := NewBuilder()
+	savedReq.AppendMessage(1, uq.Bytes())
+
+	// Canvas 아티팩트 (ModelResponse.f13)
+	artMeta := NewBuilder()
+	artMeta.AppendString(1, "c_1_demo.tsx")
+	artMeta.AppendString(13, "react")
+
+	artCode := NewBuilder()
+	artCode.AppendString(1, "export default function App() { return null; }")
+	artCode.AppendString(2, "react")
+
+	artF1 := NewBuilder()
+	artF1.AppendMessage(5, artCode.Bytes())
+	artF3 := NewBuilder()
+	artF3.AppendMessage(1, artF1.Bytes())
+
+	art := NewBuilder()
+	art.AppendMessage(1, artMeta.Bytes())
+	art.AppendMessage(3, artF3.Bytes())
+	art.AppendString(6, "Demo Canvas App")
+	art.AppendString(7, "https://gemini.google.com/app/1?canvas-id=demo")
+
+	mr := NewBuilder()
+	mr.AppendString(1, "rc_10")
+	mr.AppendString(4, "결과입니다.\nhttp://googleusercontent.com/immersive_entry_chip/0")
+	mr.AppendMessage(13, art.Bytes())
+
+	// 예약 작업 제목 (StatusUpdateResponse.f13.f9)
+	remy := NewBuilder()
+	remy.AppendString(9, "일일 브리핑")
+	st := NewBuilder()
+	st.AppendMessage(13, remy.Bytes())
+
+	savedResp := NewBuilder()
+	savedResp.AppendMessage(1, mr.Bytes())
+	savedResp.AppendString(4, "rc_10")
+	savedResp.AppendMessage(5, st.Bytes())
+	savedResp.AppendBool(11, true) // aborted
+
+	ids := NewBuilder()
+	ids.AppendString(1, "c_1")
+	ids.AppendString(2, "r_1")
+
+	schedFlag := NewBuilder()
+	schedFlag.AppendInt32(1, 1)
+
+	turn := NewBuilder()
+	turn.AppendMessage(1, ids.Bytes())
+	turn.AppendMessage(3, savedReq.Bytes())
+	turn.AppendMessage(4, savedResp.Bytes())
+	turn.AppendMessage(17, schedFlag.Bytes())
+
+	resp := NewBuilder()
+	resp.AppendMessage(1, turn.Bytes())
+
+	decoded, err := DecodeListConversationTurnsResponse(resp.Bytes())
+	if err != nil || len(decoded.Turns) != 1 {
+		t.Fatalf("턴 디코딩 실패: turns=%d err=%v", len(decoded.Turns), err)
+	}
+	got := decoded.Turns[0]
+	if len(got.UserAttachments) != 1 || got.UserAttachments[0].Name != "sample.jpg" ||
+		got.UserAttachments[0].Width != 485 || got.UserAttachments[0].Height != 1000 {
+		t.Fatalf("사용자 첨부 디코딩 불일치: %+v", got.UserAttachments)
+	}
+	if len(got.Artifacts) != 1 || got.Artifacts[0].Title != "Demo Canvas App" ||
+		got.Artifacts[0].Language != "react" || got.Artifacts[0].Content == "" ||
+		got.Artifacts[0].URL == "" {
+		t.Fatalf("Canvas 아티팩트 디코딩 불일치: %+v", got.Artifacts)
+	}
+	if !got.IsScheduledRun || got.ScheduledTitle != "일일 브리핑" || !got.Aborted {
+		t.Fatalf("예약/중단 메타 디코딩 불일치: sched=%v title=%q aborted=%v", got.IsScheduledRun, got.ScheduledTitle, got.Aborted)
+	}
+}

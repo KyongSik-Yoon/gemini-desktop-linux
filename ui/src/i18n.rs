@@ -475,8 +475,26 @@ pub fn t(locale: Locale, ko: &'static str) -> &'static str {
         "음성 녹음이 첨부되었습니다 (전송 시 분석)" => "Voice recording attached (analyzed on send)",
         "음성 녹음을 시작했습니다 (다시 누르면 종료)" => "Recording voice (click again to stop)",
         "응답 생성을 중단했습니다" => "Generation stopped",
+        "응답 생성이 중단되었습니다" => "Response generation was stopped",
         "클립보드에 복사되었습니다" => "Copied to clipboard",
         "안전하지 않은 링크 형식은 열 수 없습니다" => "Blocked unsupported link scheme",
+
+        // 리치 렌더러 · 표 · 예약 실행 · 도구 접힘 · 생성 이미지 · Canvas
+        "표 복사" => "Copy table",
+        "예약 실행됨" => "Scheduled run",
+        "도구 활동 숨기기" => "Hide tool activity",
+        "도구 활동 표시" => "Show tool activity",
+        "이미지 불러오는 중..." => "Loading image...",
+        "생성된 이미지" => "Generated image",
+        "원본 열기" => "Open image",
+        "웹 Gemini에서 보기" => "View in Gemini web",
+        "코드 보기" => "View code",
+        "브라우저에서 실행" => "Run in browser",
+        "웹에서 열기" => "Open in web",
+        "코드 복사" => "Copy code",
+        "브라우저에서 Canvas HTML을 열었습니다" => "Opened Canvas HTML in browser",
+        "Canvas HTML 임시 파일 생성에 실패했습니다" => "Failed to create temporary Canvas HTML file",
+        "첨부 파일" => "Attachment",
 
         _ => ko,
     }

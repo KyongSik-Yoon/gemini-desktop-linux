@@ -136,6 +136,19 @@ func (c *Client) ListGeminiAppArtifacts(ctx context.Context, pageSize int32) ([]
 	return merged, nil
 }
 
+// ListGeminiMediaArtifacts는 서버 라이브러리에서 생성 이미지(미디어) 아티팩트만 조회한다.
+func (c *Client) ListGeminiMediaArtifacts(ctx context.Context, pageSize int32) ([]proto.AppArtifact, error) {
+	if pageSize <= 0 {
+		pageSize = 60
+	}
+	reqBytes := proto.EncodeListGeminiAppArtifactsRequest(c.buildChatMetadata(), pageSize, true)
+	respBytes, err := c.invokeUnary(ctx, PathListGeminiAppArtifacts, reqBytes)
+	if err != nil {
+		return nil, err
+	}
+	return proto.DecodeListGeminiAppArtifactsResponse(respBytes, true)
+}
+
 // GetUsageInfo는 현재 계정의 사용량 한도 정보를 조회한다.
 func (c *Client) GetUsageInfo(ctx context.Context) (*proto.UsageInfo, error) {
 	reqBytes := proto.EncodeGetUsageInfoRequest(c.buildChatMetadata())

@@ -481,6 +481,47 @@ pub struct ShareResponse {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TurnAttachment {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub mime_type: String,
+    #[serde(default)]
+    pub width: i32,
+    #[serde(default)]
+    pub height: i32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GeneratedImage {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub placeholder_id: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TurnArtifact {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConversationTurn {
     #[serde(default)]
@@ -492,6 +533,8 @@ pub struct ConversationTurn {
     #[serde(default)]
     pub user_text: String,
     #[serde(default)]
+    pub user_attachments: Vec<TurnAttachment>,
+    #[serde(default)]
     pub model_text: String,
     #[serde(default)]
     pub thoughts: String,
@@ -500,7 +543,17 @@ pub struct ConversationTurn {
     #[serde(default)]
     pub tool_activities: Vec<RemoteToolActivity>,
     #[serde(default)]
+    pub generated_images: Vec<GeneratedImage>,
+    #[serde(default)]
+    pub artifacts: Vec<TurnArtifact>,
+    #[serde(default)]
+    pub is_scheduled_run: bool,
+    #[serde(default)]
+    pub scheduled_title: String,
+    #[serde(default)]
     pub model_attribution: String,
+    #[serde(default)]
+    pub aborted: bool,
     #[serde(default)]
     pub timestamp_unix: i64,
 }
@@ -590,6 +643,8 @@ pub struct ChatStreamChunk {
     pub status_text: String,
     #[serde(default)]
     pub tool_activities: Vec<RemoteToolActivity>,
+    #[serde(default)]
+    pub artifacts: Vec<TurnArtifact>,
     #[serde(default)]
     pub target_device_name: String,
     #[serde(default)]
