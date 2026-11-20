@@ -32,6 +32,10 @@ type Server struct {
 	avatarBytes []byte
 	avatarType  string
 	avatarURL   string
+
+	mediaMu      sync.Mutex
+	mediaCache   []proto.AppArtifact
+	mediaCacheAt time.Time
 }
 
 func NewServer(cfg *config.Config, robinCli *robin.Client, sockPath string) *Server {
@@ -663,44 +667,77 @@ func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// enrichGeneratedImages는 image_generation_content 플레이스홀더가 포함된 턴에
-// 서버 미디어 아티팩트의 실제 생성 이미지 URL을 매칭해 채운다.
+// getCachedMediaArtifacts는 생성 이미지 아티팩트 목록을 짧게(30초) 캐시해
+// 일반 대화 조회 시 불필요한 추가 RPC 지연을 방지한다.
+func (s *Server) getCachedMediaArtifacts(ctx context.Context, forceRefresh bool) []proto.AppArtifact {
+	const ttl = 30 * time.Second
+	s.mediaMu.Lock()
+	if !forceRefresh && !s.mediaCacheAt.IsZero() && time.Since(s.mediaCacheAt) < ttl {
+		cached := s.mediaCache
+		s.mediaMu.Unlock()
+		return cached
+	}
+	s.mediaMu.Unlock()
+
+	media, err := s.robinCli.ListGeminiMediaArtifacts(ctx, 80)
+	if err != nil {
+		return nil
+	}
+	s.mediaMu.Lock()
+	s.mediaCache = media
+	s.mediaCacheAt = time.Now()
+	s.mediaMu.Unlock()
+	return media
+}
+
+// enrichGeneratedImages는 서버 미디어 아티팩트의 실제 생성 이미지 URL을 해당 대화 턴에 매칭해 채운다.
+// 플레이스홀더(`image_generation_content/`)가 없는 생성 이미지 턴도 ResponseID/RequestID 정확 매칭으로 복구한다.
 func (s *Server) enrichGeneratedImages(ctx context.Context, convID string, turns []proto.ConversationTurn) {
 	if s.robinCli == nil || len(turns) == 0 {
 		return
 	}
-	needEnrich := false
+	hasPlaceholder := false
 	for i := range turns {
-		if len(turns[i].GeneratedImages) == 0 &&
-			strings.Contains(turns[i].ModelText, "googleusercontent.com/image_generation_content/") {
-			needEnrich = true
+		if strings.Contains(turns[i].ModelText, "googleusercontent.com/image_generation_content/") {
+			hasPlaceholder = true
 			break
 		}
 	}
-	if !needEnrich {
-		return
-	}
-	media, err := s.robinCli.ListGeminiMediaArtifacts(ctx, 80)
-	if err != nil || len(media) == 0 {
-		return
-	}
-	var convMedia []proto.AppArtifact
-	for _, m := range media {
-		if m.ConversationID == convID && m.URL != "" {
-			convMedia = append(convMedia, m)
+
+	media := s.getCachedMediaArtifacts(ctx, false)
+	filterConv := func(all []proto.AppArtifact) []proto.AppArtifact {
+		var out []proto.AppArtifact
+		for _, m := range all {
+			if m.ConversationID == convID && m.URL != "" {
+				out = append(out, m)
+			}
 		}
+		return out
+	}
+
+	convMedia := filterConv(media)
+	// 플레이스홀더가 있는데 캐시에 해당 대화의 미디어가 없으면 1회 강제 갱신(방금 생성된 이미지 대응)
+	if len(convMedia) == 0 && hasPlaceholder {
+		media = s.getCachedMediaArtifacts(ctx, true)
+		convMedia = filterConv(media)
 	}
 	if len(convMedia) == 0 {
 		return
 	}
 
+	// 오래된 생성 순서대로 정렬해 다중 이미지 턴에서 플레이스홀더 순번과 맞춘다.
+	for i := 0; i < len(convMedia)-1; i++ {
+		for j := i + 1; j < len(convMedia); j++ {
+			if convMedia[j].CreatedAtUnix < convMedia[i].CreatedAtUnix {
+				convMedia[i], convMedia[j] = convMedia[j], convMedia[i]
+			}
+		}
+	}
+
 	used := make([]bool, len(convMedia))
-	// 1차: ResponseID / RequestID 정확 매칭
+	// 1차: ResponseID / RequestID 정확 매칭 (플레이스홀더 유무와 무관하게 매칭)
 	for i := range turns {
 		t := &turns[i]
-		if !strings.Contains(t.ModelText, "googleusercontent.com/image_generation_content/") {
-			continue
-		}
 		for mi, m := range convMedia {
 			if used[mi] {
 				continue

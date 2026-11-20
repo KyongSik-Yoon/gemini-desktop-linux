@@ -6115,10 +6115,14 @@ impl App {
                         }
                     }
                     if !thumb_items.is_empty() {
-                        col = col.push(row(thumb_items).spacing(8));
+                        for chunk in chunk_elements(thumb_items, 3) {
+                            col = col.push(row(chunk).spacing(8));
+                        }
                     }
                     if !chip_items.is_empty() {
-                        col = col.push(row(chip_items).spacing(6));
+                        for chunk in chunk_elements(chip_items, 3) {
+                            col = col.push(row(chunk).spacing(6));
+                        }
                     }
                 } else if !msg.attachments.is_empty() {
                     let chips: Vec<Element<'_, Message>> = msg
@@ -6569,7 +6573,7 @@ impl App {
                     content = content.push(aborted_badge);
                 }
 
-                if !is_streaming_here && !msg.raw_text.is_empty() {
+                if !is_streaming_here && (has_body || msg.aborted) {
                     let fb = self.message_feedback.get(&idx).copied();
                     let up_active = fb == Some(true);
                     let down_active = fb == Some(false);
@@ -6610,22 +6614,27 @@ impl App {
                                 14.0,
                             )
                         }),
-                        button(
-                            row![
-                                Icon::Copy.view(13.0, text_secondary),
-                                text(t(loc, "복사")).size(12).color(text_secondary),
-                            ]
-                            .spacing(5)
-                            .align_y(Alignment::Center),
-                        )
-                        .on_press(Message::CopyText(msg.raw_text.clone()))
-                        .padding([4, 10])
-                        .style(move |_, status| {
-                            ghost_btn_style(status, bg_hover, text_secondary, 8.0)
-                        }),
                     ]
                     .spacing(4)
                     .align_y(Alignment::Center);
+
+                    if !msg.raw_text.is_empty() {
+                        actions = actions.push(
+                            button(
+                                row![
+                                    Icon::Copy.view(13.0, text_secondary),
+                                    text(t(loc, "복사")).size(12).color(text_secondary),
+                                ]
+                                .spacing(5)
+                                .align_y(Alignment::Center),
+                            )
+                            .on_press(Message::CopyText(msg.raw_text.clone()))
+                            .padding([4, 10])
+                            .style(move |_, status| {
+                                ghost_btn_style(status, bg_hover, text_secondary, 8.0)
+                            }),
+                        );
+                    }
 
                     if let Some(cid) = &self.active_conv_id {
                         actions = actions.push(
@@ -6823,6 +6832,23 @@ fn is_html_artifact(art: &TurnArtifact) -> bool {
     head.starts_with("<!doctype html") || head.starts_with("<html")
 }
 
+/// UI 요소 벡터를 지정한 최대 개수의 행 묶음으로 분할한다.
+fn chunk_elements<'a>(items: Vec<Element<'a, Message>>, per_row: usize) -> Vec<Vec<Element<'a, Message>>> {
+    let per_row = per_row.max(1);
+    let mut rows = Vec::new();
+    let mut cur = Vec::with_capacity(per_row);
+    for item in items {
+        cur.push(item);
+        if cur.len() == per_row {
+            rows.push(std::mem::replace(&mut cur, Vec::with_capacity(per_row)));
+        }
+    }
+    if !cur.is_empty() {
+        rows.push(cur);
+    }
+    rows
+}
+
 /// Canvas HTML 아티팩트를 사용자 전용 임시 디렉터리에 저장하고 기본 브라우저로 연다.
 fn write_and_open_canvas_html(title: &str, content: &str) -> Result<PathBuf, String> {
     use std::fs;
@@ -6833,6 +6859,21 @@ fn write_and_open_canvas_html(title: &str, content: &str) -> Result<PathBuf, Str
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+
+    // 24시간 이상 지난 이전 임시 HTML 파일 자동 정리
+    if let Ok(entries) = fs::read_dir(&dir) {
+        let now = std::time::SystemTime::now();
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("html")
+                && let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && now.duration_since(modified).map(|d| d.as_secs() > 86_400).unwrap_or(false)
+            {
+                let _ = fs::remove_file(p);
+            }
+        }
+    }
 
     let slug: String = title
         .chars()

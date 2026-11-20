@@ -807,6 +807,7 @@ pub(crate) fn view<'a>(
         palette: palette.clone(),
         locale,
         in_table: false,
+        table_align: None,
     };
 
     let mut children: Vec<Element<'a, Message>> = Vec::with_capacity(parsed.blocks.len() + 2);
@@ -856,6 +857,7 @@ struct GeminiMarkdownViewer {
     palette: AppTheme,
     locale: Locale,
     in_table: bool,
+    table_align: Option<alignment::Horizontal>,
 }
 
 impl GeminiMarkdownViewer {
@@ -958,18 +960,17 @@ impl GeminiMarkdownViewer {
         } else {
             BODY_LINE_HEIGHT
         };
-        let rt = rich_text(spans)
+        let mut rt = rich_text(spans)
             .size(settings.text_size)
             .line_height(text::LineHeight::Relative(line_h))
             .color(self.palette.text_primary)
             .wrapping(text::Wrapping::WordOrGlyph)
-            .on_link_click(Message::LinkClicked);
-
-        if self.in_table {
-            rt.width(Fill).into()
-        } else {
-            rt.width(Fill).into()
+            .on_link_click(Message::LinkClicked)
+            .width(Fill);
+        if let Some(ax) = self.table_align {
+            rt = rt.align_x(ax);
         }
+        rt.into()
     }
 
     fn render_heading<'a>(
@@ -1466,7 +1467,11 @@ impl GeminiMarkdownViewer {
                             .collect();
                         column(header_blocks).spacing(4).width(Fill).into()
                     } else {
-                        cell_viewer.render_items(st, items, 0)
+                        let aligned_viewer = Self {
+                            table_align: Some(align_x),
+                            ..cell_viewer.clone()
+                        };
+                        aligned_viewer.render_items(st, items, 0)
                     }
                 })
                 .collect();
@@ -1672,10 +1677,7 @@ impl GeminiMarkdownViewer {
         let text_secondary = self.palette.text_secondary;
         let accent = self.palette.accent;
 
-        let matched = ctx
-            .generated_images
-            .get(img_idx)
-            .or_else(|| ctx.generated_images.first());
+        let matched = ctx.generated_images.get(img_idx);
 
         let Some(img_meta) = matched else {
             // 서버 미디어 매칭이 없는 경우에도 가짜 googleusercontent URL 대신 안내 칩을 표시한다.
@@ -1833,15 +1835,8 @@ impl GeminiMarkdownViewer {
         let text_strong = self.palette.text_strong;
         let text_secondary = self.palette.text_secondary;
 
-        let art_opt = ctx
-            .artifacts
-            .get(canvas_idx)
-            .or_else(|| ctx.artifacts.first());
-        let resolved_idx = if canvas_idx < ctx.artifacts.len() {
-            canvas_idx
-        } else {
-            0
-        };
+        let art_opt = ctx.artifacts.get(canvas_idx);
+        let resolved_idx = canvas_idx;
 
         let Some(art) = art_opt else {
             return container(
@@ -1925,9 +1920,11 @@ impl GeminiMarkdownViewer {
             );
         }
 
+        let head_lower = art.content.trim_start().to_ascii_lowercase();
         let is_html = art.language.eq_ignore_ascii_case("html")
-            || art.content.trim_start().starts_with("<!DOCTYPE")
-            || art.content.trim_start().starts_with("<html");
+            || art.language.eq_ignore_ascii_case("htm")
+            || head_lower.starts_with("<!doctype html")
+            || head_lower.starts_with("<html");
         if is_html && !art.content.is_empty() {
             actions = actions.push(
                 button(text(t(loc, "브라우저에서 실행")).size(12).color(accent))
