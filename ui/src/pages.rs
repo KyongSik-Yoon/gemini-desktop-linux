@@ -1161,18 +1161,18 @@ impl App {
                                     },
                                     ..container::Style::default()
                                 }),
-                            text(t(loc, *title))
+                            text(t(loc, title))
                                 .size(14.5)
                                 .font(font_semibold())
                                 .color(text_strong),
-                            text(t(loc, *desc))
+                            text(t(loc, desc))
                                 .size(12.5)
                                 .color(text_secondary)
                                 .wrapping(text::Wrapping::WordOrGlyph),
                         ]
                         .spacing(8),
                     )
-                    .on_press(Message::StartFeaturePrompt(*fmode, t(loc, *prompt).into()))
+                    .on_press(Message::StartFeaturePrompt(*fmode, t(loc, prompt).into()))
                     .padding(16)
                     .width(Fill)
                     .style(move |_, status| {

@@ -4874,6 +4874,7 @@ impl App {
             })
             .into()
         } else {
+            let text_code = self.palette.text_code;
             container(
                 scrollable(
                     container(
@@ -4881,7 +4882,7 @@ impl App {
                             .size(12.5)
                             .font(iced::Font::MONOSPACE)
                             .line_height(text::LineHeight::Relative(1.52))
-                            .color(text_primary),
+                            .color(text_code),
                     )
                     .padding([14, 16]),
                 )
@@ -4891,7 +4892,7 @@ impl App {
                     vertical: scrollable::Scrollbar::default().width(6).scroller_width(6),
                     horizontal: scrollable::Scrollbar::default().width(6).scroller_width(6),
                 })
-                .style(move |_, status| pal_scroll.subtle_scrollable_style(status)),
+                .style(move |_, status| pal_scroll.subtle_code_scrollable_style(status)),
             )
             .width(Fill)
             .height(Fill)

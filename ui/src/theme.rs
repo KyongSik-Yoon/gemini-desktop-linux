@@ -105,6 +105,7 @@ pub struct AppTheme {
     pub text_secondary: Color,
     pub text_muted: Color,
     pub text_inline_code: Color,
+    pub text_code: Color,
 
     pub accent: Color,
     pub accent_fg: Color,
@@ -380,6 +381,7 @@ impl AppTheme {
             text_secondary: dark_fg,
             text_muted: mix(dark_fg, bg_canvas, 0.22),
             text_inline_code: bright_fg,
+            text_code: hex(0xdbe5f5),
             accent,
             accent_fg,
             accent_soft,
@@ -422,6 +424,7 @@ impl AppTheme {
                 text_secondary: hex(0x9aa0a6),
                 text_muted: hex(0x7c8087),
                 text_inline_code: hex(0xe8eaed),
+                text_code: hex(0xdbe5f5),
                 accent,
                 accent_fg: hex(0x062e6f),
                 accent_soft: hex(0x1e2c44),
@@ -458,6 +461,7 @@ impl AppTheme {
                 text_secondary: hex(0x5f6368),
                 text_muted: hex(0x80868b),
                 text_inline_code: hex(0x1f1f1f),
+                text_code: hex(0xdbe5f5),
                 accent,
                 accent_fg: Color::WHITE,
                 accent_soft: hex(0xe8f0fe),
@@ -487,7 +491,21 @@ impl AppTheme {
         &self,
         status: scrollable::Status,
     ) -> scrollable::Style {
-        let fg = self.text_primary;
+        Self::subtle_scrollable_style_with_fg(self.text_primary, status)
+    }
+
+    /// 어두운 코드 배경(`bg_code`) 위에서도 선명하게 보이는 미니멀 스크롤바 스타일.
+    pub fn subtle_code_scrollable_style(
+        &self,
+        status: scrollable::Status,
+    ) -> scrollable::Style {
+        Self::subtle_scrollable_style_with_fg(self.text_code, status)
+    }
+
+    fn subtle_scrollable_style_with_fg(
+        fg: Color,
+        status: scrollable::Status,
+    ) -> scrollable::Style {
         let alpha = match status {
             scrollable::Status::Active { .. } => 0.0,
             scrollable::Status::Hovered {
@@ -663,5 +681,18 @@ foreground = "#212121"
         assert!(luminance(theme.bg_sidebar) > luminance(theme.bg_canvas));
         assert_eq!(theme.accent, hex(0x3264eb));
         assert_eq!(theme.text_primary, hex(0x212121));
+        assert!(luminance(theme.text_code) - luminance(theme.bg_code) >= 0.5);
+    }
+
+    #[test]
+    fn 코드_뷰_텍스트와_배경_명도_대비가_라이트_다크_모두_충분함() {
+        for is_dark in [false, true] {
+            let theme = AppTheme::fallback(is_dark);
+            let contrast = luminance(theme.text_code) - luminance(theme.bg_code);
+            assert!(
+                contrast >= 0.5,
+                "is_dark={is_dark} 코드 뷰 명도 대비({contrast:.2})가 부족합니다"
+            );
+        }
     }
 }

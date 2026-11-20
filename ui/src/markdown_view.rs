@@ -34,7 +34,7 @@ pub(crate) struct ParsedMarkdown {
 }
 
 enum MarkdownBlock {
-    Rich(markdown::Content),
+    Rich(Box<markdown::Content>),
     Table(ParsedTable),
     GeneratedImageRef(usize),
     CanvasRef(usize),
@@ -84,7 +84,9 @@ impl ParsedMarkdown {
         let flush_rich = |buf: &mut String, out: &mut Vec<MarkdownBlock>| {
             if !buf.trim().is_empty() {
                 let processed = preprocess_markdown(buf);
-                out.push(MarkdownBlock::Rich(markdown::Content::parse(&processed)));
+                out.push(MarkdownBlock::Rich(Box::new(markdown::Content::parse(
+                    &processed,
+                ))));
             }
             buf.clear();
         };
@@ -172,11 +174,13 @@ impl ParsedMarkdown {
             || delta.contains("<br")
             || delta.contains("<BR");
 
-        if !needs_reparse && !delta.is_empty() && full_text.starts_with(prev_raw) {
-            if let Some(MarkdownBlock::Rich(content)) = self.blocks.first_mut() {
-                content.push_str(delta);
-                return;
-            }
+        if !needs_reparse
+            && !delta.is_empty()
+            && full_text.starts_with(prev_raw)
+            && let Some(MarkdownBlock::Rich(content)) = self.blocks.first_mut()
+        {
+            content.push_str(delta);
+            return;
         }
         *self = Self::parse(full_text);
     }
@@ -223,7 +227,9 @@ fn split_line_placeholders(
         }
         if !rich_buf.trim().is_empty() {
             let processed = preprocess_markdown(rich_buf);
-            blocks.push(MarkdownBlock::Rich(markdown::Content::parse(&processed)));
+            blocks.push(MarkdownBlock::Rich(Box::new(markdown::Content::parse(
+                &processed,
+            ))));
         }
         rich_buf.clear();
 
@@ -268,18 +274,18 @@ fn find_placeholder_span(s: &str, kind_path: &str) -> Option<(usize, usize)> {
     // `![...](url)` 또는 `[...](url)`로 감싸져 있으면 전체 마크다운 토큰을 대체
     let mut span_start = url_start;
     let mut span_end = url_end;
-    if url_start > 0 && s.as_bytes()[url_start - 1] == b'(' {
-        if let Some(open_bracket) = s[..url_start - 1].rfind('[') {
-            if s[open_bracket..url_start - 1].ends_with(']') {
-                span_start = if open_bracket > 0 && s.as_bytes()[open_bracket - 1] == b'!' {
-                    open_bracket - 1
-                } else {
-                    open_bracket
-                };
-                if span_end < s.len() && s.as_bytes()[span_end] == b')' {
-                    span_end += 1;
-                }
-            }
+    if url_start > 0
+        && s.as_bytes()[url_start - 1] == b'('
+        && let Some(open_bracket) = s[..url_start - 1].rfind('[')
+        && s[open_bracket..url_start - 1].ends_with(']')
+    {
+        span_start = if open_bracket > 0 && s.as_bytes()[open_bracket - 1] == b'!' {
+            open_bracket - 1
+        } else {
+            open_bracket
+        };
+        if span_end < s.len() && s.as_bytes()[span_end] == b')' {
+            span_end += 1;
         }
     }
 
@@ -389,13 +395,14 @@ fn split_cell_br_lines(cell: &str) -> Vec<String> {
             i += 1;
             continue;
         }
-        if !in_code && bytes[i] == b'<' {
-            if let Some(tag_len) = match_br_tag(&cell[i..]) {
-                lines.push(cur.trim().to_string());
-                cur.clear();
-                i += tag_len;
-                continue;
-            }
+        if !in_code
+            && bytes[i] == b'<'
+            && let Some(tag_len) = match_br_tag(&cell[i..])
+        {
+            lines.push(cur.trim().to_string());
+            cur.clear();
+            i += tag_len;
+            continue;
         }
         let ch = cell[i..].chars().next().unwrap();
         cur.push(ch);
@@ -459,14 +466,15 @@ fn strip_markdown_syntax_for_width(s: &str) -> String {
             // [label](url) 형태면 label만 폭 계산에 포함
             if let Some(close_b) = chars[i + 1..].iter().position(|&c| c == ']') {
                 let close_idx = i + 1 + close_b;
-                if close_idx + 1 < chars.len() && chars[close_idx + 1] == '(' {
-                    if let Some(close_p) = chars[close_idx + 2..].iter().position(|&c| c == ')') {
-                        for &c in &chars[i + 1..close_idx] {
-                            out.push(c);
-                        }
-                        i = close_idx + 2 + close_p + 1;
-                        continue;
+                if close_idx + 1 < chars.len()
+                    && chars[close_idx + 1] == '('
+                    && let Some(close_p) = chars[close_idx + 2..].iter().position(|&c| c == ')')
+                {
+                    for &c in &chars[i + 1..close_idx] {
+                        out.push(c);
                     }
+                    i = close_idx + 2 + close_p + 1;
+                    continue;
                 }
             }
         }
@@ -496,9 +504,9 @@ fn parse_gfm_table(table_lines: &[&str]) -> Option<ParsedTable> {
 
     let mut max_units = vec![6usize; col_count];
     let mut headers = Vec::with_capacity(col_count);
-    for col in 0..col_count {
+    for (col, max_u) in max_units.iter_mut().enumerate().take(col_count) {
         let raw = header_raw.get(col).map(|s| s.as_str()).unwrap_or("");
-        max_units[col] = max_units[col].max(visual_cell_units(raw));
+        *max_u = (*max_u).max(visual_cell_units(raw));
         headers.push(parse_cell_contents(raw));
     }
 
@@ -506,9 +514,9 @@ fn parse_gfm_table(table_lines: &[&str]) -> Option<ParsedTable> {
     for line in &table_lines[2..] {
         let raw_cells = split_table_cells(line);
         let mut parsed_row = Vec::with_capacity(col_count);
-        for col in 0..col_count {
+        for (col, max_u) in max_units.iter_mut().enumerate().take(col_count) {
             let raw = raw_cells.get(col).map(|s| s.as_str()).unwrap_or("");
-            max_units[col] = max_units[col].max(visual_cell_units(raw));
+            *max_u = (*max_u).max(visual_cell_units(raw));
             parsed_row.push(parse_cell_contents(raw));
         }
         rows.push(parsed_row);
@@ -675,22 +683,22 @@ fn preprocess_inline_line(line: &str, out: &mut String) {
         }
 
         // 인라인 코드 외부의 `<br>`, `<br/>`, `<br />` 태그를 마크다운 하드 줄바꿈으로 변환
-        if chars[i] == '<' {
-            if let Some(tag_len) = match_br_tag_chars(&chars, i) {
-                let next_idx = i + tag_len;
-                let followed_by_newline = next_idx < len
-                    && (chars[next_idx] == '\n'
-                        || (chars[next_idx] == '\r'
-                            && next_idx + 1 < len
-                            && chars[next_idx + 1] == '\n'));
-                if followed_by_newline {
-                    out.push_str("  ");
-                } else {
-                    out.push_str("  \n");
-                }
-                i += tag_len;
-                continue;
+        if chars[i] == '<'
+            && let Some(tag_len) = match_br_tag_chars(&chars, i)
+        {
+            let next_idx = i + tag_len;
+            let followed_by_newline = next_idx < len
+                && (chars[next_idx] == '\n'
+                    || (chars[next_idx] == '\r'
+                        && next_idx + 1 < len
+                        && chars[next_idx + 1] == '\n'));
+            if followed_by_newline {
+                out.push_str("  ");
+            } else {
+                out.push_str("  \n");
             }
+            i += tag_len;
+            continue;
         }
 
         // 정확히 두 개의 별표(`**`)만 볼드 경계로 판별 (`***` 이상은 그대로 유지)
@@ -1320,6 +1328,7 @@ impl GeminiMarkdownViewer {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("code");
         let code_owned = code.to_string();
+        let text_code = self.palette.text_code;
         let fg_code_header = Color::from_rgb(0.84, 0.88, 0.94);
 
         let header = container(
@@ -1339,7 +1348,7 @@ impl GeminiMarkdownViewer {
                 )
                 .on_press(Message::CopyText(code_owned))
                 .padding([4, 10])
-                .style(|_, status| {
+                .style(move |_, status| {
                     let hovered = matches!(status, button::Status::Hovered);
                     button::Style {
                         background: Some(Background::Color(if hovered {
@@ -1347,7 +1356,7 @@ impl GeminiMarkdownViewer {
                         } else {
                             Color::from_rgba(1.0, 1.0, 1.0, 0.06)
                         })),
-                        text_color: Color::from_rgb(0.86, 0.90, 0.96),
+                        text_color: text_code,
                         border: Border {
                             radius: 6.0.into(),
                             ..Border::default()
@@ -1390,7 +1399,7 @@ impl GeminiMarkdownViewer {
                     .font(settings.style.code_block_font)
                     .size(settings.code_size)
                     .line_height(text::LineHeight::Relative(CODE_LINE_HEIGHT))
-                    .color(Color::from_rgb(0.86, 0.90, 0.96))
+                    .color(text_code)
                     .into()
             }
         }))
@@ -1404,7 +1413,7 @@ impl GeminiMarkdownViewer {
                     .width(5)
                     .scroller_width(5),
             ))
-            .style(move |_, status| pal_scroll.subtle_scrollable_style(status));
+            .style(move |_, status| pal_scroll.subtle_code_scrollable_style(status));
 
         let bg_code = self.palette.bg_code;
         let border_col = self.palette.border_subtle;

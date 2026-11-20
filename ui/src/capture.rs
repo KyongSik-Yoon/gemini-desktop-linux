@@ -56,10 +56,9 @@ pub async fn capture_screen() -> Result<PathBuf, String> {
         .args(["-window", "root", &out_path.to_string_lossy()])
         .output()
         .await
+        && cap.status.success()
     {
-        if cap.status.success() {
-            return Ok(out_path);
-        }
+        return Ok(out_path);
     }
 
     if let Ok(cap) = AsyncCommand::new("scrot").arg(&out_path).output().await {
