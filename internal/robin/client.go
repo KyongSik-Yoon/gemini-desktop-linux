@@ -262,11 +262,50 @@ func (c *Client) ReportClientPresence(ctx context.Context) error {
 	return err
 }
 
+// ToolExecEvent는 로컬 데몬이 원격 도구 호출을 수행할 때 방출하는 실시간 이벤트다.
+type ToolExecEvent struct {
+	SessionID     string `json:"session_id"`
+	CallID        string `json:"call_id,omitempty"`
+	ToolName      string `json:"tool_name"`
+	ArgsBrief     string `json:"args_brief,omitempty"`
+	Phase         string `json:"phase"` // session_connected, started, finished, error, session_ended
+	Error         string `json:"error,omitempty"`
+	DurationMs    int64  `json:"duration_ms,omitempty"`
+	TimestampUnix int64  `json:"timestamp_unix"`
+}
+
 // SessionHooks는 원격 도구 세션 상태 변화를 데몬에 알리기 위한 선택적 콜백 집합이다.
 type SessionHooks struct {
 	OnToolCallStart func()
 	OnToolCallEnd   func()
 	OnIdle          func(idle bool)
+	OnToolEvent     func(ToolExecEvent)
+}
+
+// ToolCount는 현재 등록된 데스크톱 도구 개수를 반환한다.
+func (c *Client) ToolCount() int {
+	if c.executor == nil {
+		return 0
+	}
+	return len(c.executor.Declarations())
+}
+
+func summarizeToolArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	for _, key := range []string{"command", "CommandLine", "path", "DirectoryPath", "directory", "query", "pattern", "ToolName", "FilePath", "name"} {
+		if v, ok := args[key]; ok {
+			s := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if s != "" {
+				if len(s) > 80 {
+					s = s[:80] + "..."
+				}
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // ExecuteRemoteToolsSession은 WakeUpEvent 수신 시 양방향 gRPC 스트림을 열어 도구 호출을 처리하고,
@@ -483,6 +522,18 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 				return streamNoActiveSession, hadToolCalls, "0", nil
 			}
 			hadHealthyActivity = true
+			if hooks.OnToolEvent != nil {
+				sid := ev.SessionID
+				if sid == "" {
+					sid = sessionRoutingKey
+				}
+				hooks.OnToolEvent(ToolExecEvent{
+					SessionID:     sid,
+					ToolName:      "remote_session",
+					Phase:         "session_connected",
+					TimestampUnix: time.Now().Unix(),
+				})
+			}
 		}
 
 		if len(ev.FunctionCalls) > 0 {
@@ -501,14 +552,44 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 			var results []proto.FunctionResponseInput
 			for i, fc := range ev.FunctionCalls {
 				fmt.Printf("[robin] 도구 실행 요청: %s (id=%s, args=%v)\n", fc.Name, fc.ID, fc.Args)
+				startedAt := time.Now()
+				argsBrief := summarizeToolArgs(fc.Args)
+				if hooks.OnToolEvent != nil {
+					hooks.OnToolEvent(ToolExecEvent{
+						SessionID:     sessionRoutingKey,
+						CallID:        fc.ID,
+						ToolName:      strings.TrimPrefix(fc.Name, "client:"),
+						ArgsBrief:     argsBrief,
+						Phase:         "started",
+						TimestampUnix: startedAt.Unix(),
+					})
+				}
 				skipPost := i < len(ev.FunctionCalls)-1
 				callResp := c.executor.ExecuteCall(ctx, tools.CallRequest{
 					ID:   fc.ID,
 					Name: fc.Name,
 					Args: fc.Args,
 				}, skipPost)
+				var errMsg string
 				if errVal, ok := callResp.Response["error"]; ok {
+					errMsg = fmt.Sprintf("%v", errVal)
 					fmt.Printf("[robin] 도구 실행 오류 (%s): %v\n", fc.Name, errVal)
+				}
+				if hooks.OnToolEvent != nil {
+					phase := "finished"
+					if errMsg != "" {
+						phase = "error"
+					}
+					hooks.OnToolEvent(ToolExecEvent{
+						SessionID:     sessionRoutingKey,
+						CallID:        fc.ID,
+						ToolName:      strings.TrimPrefix(fc.Name, "client:"),
+						ArgsBrief:     argsBrief,
+						Phase:         phase,
+						Error:         errMsg,
+						DurationMs:    time.Since(startedAt).Milliseconds(),
+						TimestampUnix: time.Now().Unix(),
+					})
 				}
 				var atts []proto.AttachmentInput
 				for _, a := range callResp.Attachments {

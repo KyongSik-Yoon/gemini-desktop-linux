@@ -45,6 +45,34 @@ type Watcher struct {
 	sessionMaxAge   time.Duration
 	readTimeout     time.Duration
 	punctualTimeout time.Duration
+	connected       atomic.Bool
+	connMu          sync.RWMutex
+	onConnChange    func(bool)
+}
+
+// SetOnConnectionChange는 Punctual WebChannel 연결 상태 변화를 통지받을 콜백을 등록한다.
+func (w *Watcher) SetOnConnectionChange(fn func(bool)) {
+	w.connMu.Lock()
+	w.onConnChange = fn
+	w.connMu.Unlock()
+}
+
+// IsConnected는 현재 Punctual WebChannel 스트림이 연결되어 있는지 반환한다.
+func (w *Watcher) IsConnected() bool {
+	return w.connected.Load()
+}
+
+func (w *Watcher) setConnected(v bool) {
+	prev := w.connected.Swap(v)
+	if prev == v {
+		return
+	}
+	w.connMu.RLock()
+	fn := w.onConnChange
+	w.connMu.RUnlock()
+	if fn != nil {
+		fn(v)
+	}
 }
 
 func NewWatcher(authMgr *auth.Manager, deviceID string) *Watcher {
@@ -211,6 +239,8 @@ func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 		return fmt.Errorf("ForwardChannel 응답에서 SID 추출 실패: %s", string(fwdBody))
 	}
 	fmt.Printf("[punctual] WebChannel 세션 연결됨 (gsessionid=%s, SID=%s)\n", gsessionID, sid)
+	w.setConnected(true)
+	defer w.setConnected(false)
 
 	// Step 2: BackChannel GET 스트리밍 루프 (BackChannel 재연결 간에도 마지막 Punctual 활성 시각을 유지)
 	var lastPunctualNano atomic.Int64

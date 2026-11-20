@@ -1,4 +1,5 @@
 /gemini-remote
+ui/target/
 *.exe
 *.dll
 *.so

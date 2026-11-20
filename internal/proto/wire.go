@@ -558,17 +558,25 @@ func EncodeListDevicesRequest(reqMeta []byte) []byte {
 	return b.Bytes()
 }
 
+// RemoteDeviceType 열거형 상수
+const (
+	RemoteDeviceTypeUnspecified int32 = 0
+	RemoteDeviceTypeMacOS       int32 = 1
+	RemoteDeviceTypeAndroid     int32 = 2
+)
+
 // RegisteredDeviceSummary는 ListDevicesResponse의 개별 기기 요약이다.
 type RegisteredDeviceSummary struct {
-	DeliveryToken string
-	DeviceID      string
-	DeviceName    string
-	RemoteEnabled bool
-	ToolCount     int
-	Folders       []string
+	DeliveryToken  string
+	DeviceID       string
+	DeviceName     string
+	RemoteEnabled  bool
+	ToolCount      int
+	Folders        []string
+	RawDesktopInfo []byte `json:"-"`
 }
 
-// DecodeListDevicesResponse는 ListDevicesResponse(0x982e450)를 파싱한다.
+// DecodeListDevicesResponse는 ListDevicesResponse를 파싱한다.
 func DecodeListDevicesResponse(data []byte) ([]RegisteredDeviceSummary, error) {
 	fields, err := ParseFields(data)
 	if err != nil {
@@ -584,6 +592,7 @@ func DecodeListDevicesResponse(data []byte) ([]RegisteredDeviceSummary, error) {
 				case 1:
 					dev.DeliveryToken = string(d.Bytes)
 				case 2: // desktop_device_info
+					dev.RawDesktopInfo = append([]byte(nil), d.Bytes...)
 					infoFields, _ := ParseFields(d.Bytes)
 					for _, inf := range infoFields {
 						switch inf.Num {

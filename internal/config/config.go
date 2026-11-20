@@ -39,9 +39,24 @@ type Config struct {
 	TimeZone         string            `json:"time_zone"`
 	ConnectedFolders  []string          `json:"connected_folders"`
 	MCPServers        []MCPServerConfig `json:"mcp_servers"`
+	RemoteEnabled     *bool             `json:"remote_enabled,omitempty"`
 	ObsidianVaultDir  string            `json:"obsidian_vault_dir,omitempty"`
 	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `json:"oauth_client_secret,omitempty"`
+}
+
+// IsRemoteEnabled는 원격 제어 수신이 활성화되어 있는지 반환한다(미설정 시 기본 true).
+func (c *Config) IsRemoteEnabled() bool {
+	if c == nil || c.RemoteEnabled == nil {
+		return true
+	}
+	return *c.RemoteEnabled
+}
+
+// SetRemoteEnabled는 원격 제어 수신 활성화 여부를 설정한다.
+func (c *Config) SetRemoteEnabled(enabled bool) {
+	v := enabled
+	c.RemoteEnabled = &v
 }
 
 // ConfigDir는 ~/.config/gemini-remote 경로를 반환한다.
@@ -77,6 +92,20 @@ func TokenPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "token.json"), nil
+}
+
+// SocketPath는 로컬 IPC Unix 도메인 소켓 경로를 반환한다.
+func SocketPath() (string, error) {
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		if st, err := os.Stat(runtimeDir); err == nil && st.IsDir() {
+			return filepath.Join(runtimeDir, "gemini-remote.sock"), nil
+		}
+	}
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "daemon.sock"), nil
 }
 
 // LoadOrInit은 설정 파일을 읽거나 기본값으로 초기화해 저장한다.

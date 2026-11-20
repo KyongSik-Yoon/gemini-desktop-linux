@@ -1,19 +1,23 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/sam/gemini-remote-linux/internal/auth"
 	"github.com/sam/gemini-remote-linux/internal/config"
 	"github.com/sam/gemini-remote-linux/internal/daemon"
 	"github.com/sam/gemini-remote-linux/internal/mcp"
+	"github.com/sam/gemini-remote-linux/internal/proto"
 	"github.com/sam/gemini-remote-linux/internal/scotty"
 	"github.com/sam/gemini-remote-linux/internal/tools"
 )
@@ -118,11 +122,24 @@ func main() {
 	case "test-tool":
 		handleTestTool(ctx, cfg, authMgr, os.Args[2:])
 
+	case "chats":
+		handleChats(ctx, cfg, authMgr, os.Args[2:])
+
+	case "history":
+		handleHistory(ctx, cfg, authMgr, os.Args[2:])
+
+	case "ask":
+		handleAsk(ctx, cfg, authMgr, os.Args[2:])
+
+	case "chat":
+		handleChatREPL(ctx, cfg, authMgr, os.Args[2:])
+
 	case "status":
 		cfgPath, _ := config.ConfigPath()
 		tokPath, _ := config.TokenPath()
-		fmt.Printf("설정 파일: %s\n토큰 파일: %s\n기기 ID:   %s\n기기 이름: %s\n연결 폴더: %v\n",
-			cfgPath, tokPath, cfg.DeviceID, cfg.DeviceName, cfg.ConnectedFolders)
+		sockPath, _ := config.SocketPath()
+		fmt.Printf("설정 파일: %s\n토큰 파일: %s\n로컬 소켓: %s\n기기 ID:   %s\n기기 이름: %s\n연결 폴더: %v\n",
+			cfgPath, tokPath, sockPath, cfg.DeviceID, cfg.DeviceName, cfg.ConnectedFolders)
 
 	default:
 		printUsage()
@@ -224,8 +241,222 @@ func handleTestTool(ctx context.Context, cfg *config.Config, authMgr *auth.Manag
 	fmt.Println(string(enc))
 }
 
+func handleChats(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	limit := int32(20)
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--limit" || args[i] == "-n") && i+1 < len(args) {
+			if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+				limit = int32(n)
+			}
+			i++
+		}
+	}
+	d := daemon.New(cfg, authMgr)
+	res, err := d.RobinClient().ListConversations(ctx, limit, "")
+	if err != nil {
+		fatalf("대화 목록 조회 실패: %v", err)
+	}
+	if len(res.Conversations) == 0 {
+		fmt.Println("대화가 없습니다.")
+		return
+	}
+	for i, c := range res.Conversations {
+		pin := ""
+		if c.Pinned {
+			pin = " [고정]"
+		}
+		ts := ""
+		if c.TimestampUnix > 0 {
+			ts = time.Unix(c.TimestampUnix, 0).Format("2006-01-02 15:04")
+		}
+		fmt.Printf("[%2d] %s  %-16s  %s%s\n", i+1, c.ConversationID, ts, c.Title, pin)
+	}
+}
+
+func handleHistory(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	if len(args) < 1 {
+		fatalf("사용법: gemini-remote history <conversation_id> [--limit N]")
+	}
+	convID := args[0]
+	limit := int32(20)
+	for i := 1; i < len(args); i++ {
+		if (args[i] == "--limit" || args[i] == "-n") && i+1 < len(args) {
+			if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+				limit = int32(n)
+			}
+			i++
+		}
+	}
+	d := daemon.New(cfg, authMgr)
+	res, err := d.RobinClient().ListConversationTurns(ctx, convID, limit, "")
+	if err != nil {
+		fatalf("대화 이력 조회 실패: %v", err)
+	}
+	// 서버가 최신순으로 반환하는 경우를 고려해 오래된 순으로 보기 좋게 정렬 출력
+	turns := res.Turns
+	if len(turns) > 1 && turns[0].TimestampUnix > turns[len(turns)-1].TimestampUnix {
+		for l, r := 0, len(turns)-1; l < r; l, r = l+1, r-1 {
+			turns[l], turns[r] = turns[r], turns[l]
+		}
+	}
+	for i, t := range turns {
+		fmt.Printf("--- 턴 %d (req=%s, resp=%s, model=%s) ---\n", i+1, t.RequestID, t.ResponseID, t.ModelAttribution)
+		fmt.Printf("나: %s\n\n", t.UserText)
+		if t.Thoughts != "" {
+			fmt.Printf("[사고 과정]\n%s\n\n", t.Thoughts)
+		}
+		fmt.Printf("Gemini: %s\n\n", t.ModelText)
+	}
+}
+
+func handleAsk(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	var convID string
+	var temp bool
+	var showThoughts bool
+	var promptParts []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--conv", "-c":
+			if i+1 < len(args) {
+				convID = args[i+1]
+				i++
+			}
+		case "--temp":
+			temp = true
+		case "--thoughts":
+			showThoughts = true
+		default:
+			promptParts = append(promptParts, args[i])
+		}
+	}
+	prompt := strings.TrimSpace(strings.Join(promptParts, " "))
+	if prompt == "" {
+		fatalf("사용법: gemini-remote ask [--conv <id>] [--temp] [--thoughts] <질문>")
+	}
+
+	d := daemon.New(cfg, authMgr)
+	params := proto.ChatQueryParams{
+		Text:           prompt,
+		ConversationID: convID,
+		Temporary:      temp,
+	}
+	if convID != "" {
+		if turns, err := d.RobinClient().ListConversationTurns(ctx, convID, 1, ""); err == nil && len(turns.Turns) > 0 {
+			last := turns.Turns[0]
+			params.ParentRequestID = last.RequestID
+			params.ParentResponseID = last.ResponseID
+		}
+	}
+
+	printedThoughts := false
+	printedAnswer := false
+	final, err := d.RobinClient().StreamQuery(ctx, params, func(ch proto.ChatStreamChunk) error {
+		if showThoughts && ch.ThoughtsDelta != "" {
+			if !printedThoughts {
+				fmt.Fprint(os.Stderr, "[사고 과정] ")
+				printedThoughts = true
+			}
+			fmt.Fprint(os.Stderr, ch.ThoughtsDelta)
+		}
+		if ch.Delta != "" {
+			if printedThoughts && !printedAnswer {
+				fmt.Fprintln(os.Stderr)
+			}
+			printedAnswer = true
+			fmt.Print(ch.Delta)
+		}
+		return nil
+	})
+	if err != nil {
+		fatalf("질문 스트리밍 실패: %v", err)
+	}
+	fmt.Println()
+	if final != nil && final.ConversationID != "" {
+		fmt.Fprintf(os.Stderr, "(conversation_id=%s, model=%s)\n", final.ConversationID, final.ModelAttribution)
+	}
+}
+
+func handleChatREPL(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	var convID string
+	var temp bool
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--conv", "-c":
+			if i+1 < len(args) {
+				convID = args[i+1]
+				i++
+			}
+		case "--temp":
+			temp = true
+		}
+	}
+
+	d := daemon.New(cfg, authMgr)
+	var parentReqID, parentRespID string
+	if convID != "" {
+		if turns, err := d.RobinClient().ListConversationTurns(ctx, convID, 1, ""); err == nil && len(turns.Turns) > 0 {
+			parentReqID = turns.Turns[0].RequestID
+			parentRespID = turns.Turns[0].ResponseID
+			fmt.Printf("기존 대화 이어쓰기: %s\n", convID)
+		}
+	}
+	fmt.Println("Gemini 멀티턴 채팅을 시작합니다. 종료하려면 /exit 또는 Ctrl+D를 입력하세요.")
+
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for {
+		fmt.Print("\n나> ")
+		if !sc.Scan() {
+			fmt.Println()
+			return
+		}
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if line == "/exit" || line == "/quit" {
+			return
+		}
+		if line == "/new" {
+			convID, parentReqID, parentRespID = "", "", ""
+			fmt.Println("새 대화를 시작합니다.")
+			continue
+		}
+
+		fmt.Print("Gemini> ")
+		final, err := d.RobinClient().StreamQuery(ctx, proto.ChatQueryParams{
+			Text:             line,
+			ConversationID:   convID,
+			ParentRequestID:  parentReqID,
+			ParentResponseID: parentRespID,
+			Temporary:        temp,
+		}, func(ch proto.ChatStreamChunk) error {
+			if ch.Delta != "" {
+				fmt.Print(ch.Delta)
+			}
+			return nil
+		})
+		fmt.Println()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "오류: %v\n", err)
+			continue
+		}
+		if final != nil {
+			if final.ConversationID != "" {
+				convID = final.ConversationID
+			}
+			if final.RequestID != "" {
+				parentReqID = final.RequestID
+			}
+			if final.ResponseID != "" {
+				parentRespID = final.ResponseID
+			}
+		}
+	}
+}
+
 func printUsage() {
-	fmt.Println(`gemini-remote - Linux용 Gemini Android 원격 제어 브리지 데몬 (macOS Gemini.app 호환)
+	fmt.Println(`gemini-remote - Linux용 Gemini 원격 제어 데몬 및 대화 클라이언트 (macOS Gemini.app 호환)
 
 명령어:
   gemini-remote extract-keys <Gemini.app>   macOS Gemini.app 바이너리에서 OAuth 자격증명 자동 추출
@@ -234,11 +465,15 @@ func printUsage() {
   gemini-remote register                    현재 리눅스 머신 및 19개 로컬 도구를 Robin 서버에 등록
   gemini-remote unregister                  기기 등록 해제
   gemini-remote devices                     계정에 등록된 원격 데스크톱 기기 목록 조회
-  gemini-remote serve                       원격 제어 수신 데몬 실행 (Punctual + ExecuteRemoteTools)
+  gemini-remote serve                       원격 제어 및 로컬 IPC 소켓 데몬 실행
+  gemini-remote chats [--limit N]           최근 Gemini 대화 목록 조회
+  gemini-remote history <conv_id>           특정 대화방의 질문/응답 히스토리 조회
+  gemini-remote ask [--conv id] [--temp] <질문>   실시간 스트리밍 단발 질문
+  gemini-remote chat [--conv id] [--temp]   터미널 멀티턴 스트리밍 대화
   gemini-remote folders [list|add|remove]   허용 워크스페이스 폴더 조회/추가/제거
   gemini-remote service [install|uninstall|status]  systemd 사용자 서비스 관리
   gemini-remote test-tool <name> [json]     로컬 도구(19종) 단독 실행 테스트
-  gemini-remote status                      현재 기기 ID 및 설정 상태 출력`)
+  gemini-remote status                      현재 기기 ID, 소켓 경로 및 설정 상태 출력`)
 }
 
 func fatalf(format string, args ...any) {

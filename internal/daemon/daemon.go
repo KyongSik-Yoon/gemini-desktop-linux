@@ -11,6 +11,7 @@ import (
 
 	"github.com/sam/gemini-remote-linux/internal/auth"
 	"github.com/sam/gemini-remote-linux/internal/config"
+	"github.com/sam/gemini-remote-linux/internal/localapi"
 	"github.com/sam/gemini-remote-linux/internal/mcp"
 	"github.com/sam/gemini-remote-linux/internal/proto"
 	"github.com/sam/gemini-remote-linux/internal/punctual"
@@ -27,9 +28,17 @@ type Daemon struct {
 	watcher       *punctual.Watcher
 	sessionRunner func(ctx context.Context, routingKey, routingToken string, hooks robin.SessionHooks) error
 
+	cfgMu          sync.RWMutex
 	sessionMu      sync.Mutex
 	activeSessions map[string]*sessionEntry
 	lastHintProbe  map[string]time.Time
+
+	statusMu        sync.RWMutex
+	currentTool     string
+	currentToolArgs string
+	lastSyncUnix    int64
+	recentEvents    []robin.ToolExecEvent
+	subscribers     map[chan robin.ToolExecEvent]struct{}
 }
 
 type sessionEntry struct {
@@ -51,18 +60,8 @@ func New(cfg *config.Config, authMgr *auth.Manager) *Daemon {
 	mcpReg := mcp.NewRegistry(cfg)
 	executor := tools.NewExecutor(cfg, authMgr, uploader, mcpReg)
 	robinCli := robin.NewClient(cfg, authMgr, executor, mcpReg)
-	executor.SetOnFoldersChanged(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if _, err := robinCli.RegisterDevice(ctx); err != nil {
-			fmt.Printf("[daemon] 폴더 변경 후 RegisterDevice 경고: %v\n", err)
-		} else {
-			fmt.Printf("[daemon] 연결 폴더 변경사항 서버 등록 완료 (%v)\n", cfg.ConnectedFolders)
-		}
-	})
 	watcher := punctual.NewWatcher(authMgr, cfg.DeviceID)
-
-	return &Daemon{
+	d := &Daemon{
 		cfg:            cfg,
 		authMgr:        authMgr,
 		robinCli:       robinCli,
@@ -70,7 +69,23 @@ func New(cfg *config.Config, authMgr *auth.Manager) *Daemon {
 		sessionRunner:  robinCli.ExecuteRemoteToolsSessionWithHooks,
 		activeSessions: make(map[string]*sessionEntry),
 		lastHintProbe:  make(map[string]time.Time),
+		subscribers:    make(map[chan robin.ToolExecEvent]struct{}),
 	}
+	executor.SetOnFoldersChanged(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if _, err := robinCli.RegisterDevice(ctx); err != nil {
+			fmt.Printf("[daemon] 폴더 변경 후 RegisterDevice 경고: %v\n", err)
+		} else {
+			d.markSynced()
+			fmt.Printf("[daemon] 연결 폴더 변경사항 서버 등록 완료 (%v)\n", cfg.ConnectedFolders)
+		}
+		d.notifyStatusChanged("folders_changed")
+	})
+	watcher.SetOnConnectionChange(func(connected bool) {
+		d.notifyStatusChanged("punctual_connection")
+	})
+	return d
 }
 
 func (d *Daemon) RobinClient() *robin.Client {
@@ -88,13 +103,30 @@ func (d *Daemon) runSession(ctx context.Context, routingKey, routingToken string
 func (d *Daemon) Serve(ctx context.Context) error {
 	fmt.Printf("[daemon] 리눅스 원격 제어 데몬 시작 (device_id=%s, name=%s)\n", d.cfg.DeviceID, d.cfg.DeviceName)
 
-	res, err := d.robinCli.RegisterDevice(ctx)
-	if err != nil {
-		return fmt.Errorf("초기 RegisterDevice 실패: %w", err)
+	if d.cfg.IsRemoteEnabled() {
+		res, err := d.robinCli.RegisterDevice(ctx)
+		if err != nil {
+			return fmt.Errorf("초기 RegisterDevice 실패: %w", err)
+		}
+		d.markSynced()
+		fmt.Printf("[daemon] 기기 등록 완료 (surface=%d, delivery_address=%s)\n", res.TargetSurface, res.DeliveryAddress)
+		_ = d.robinCli.ReportClientPresence(ctx)
+	} else {
+		fmt.Printf("[daemon] 원격 제어 비활성화 상태로 시작 (기기 등록 대기)\n")
 	}
-	fmt.Printf("[daemon] 기기 등록 완료 (surface=%d, delivery_address=%s)\n", res.TargetSurface, res.DeliveryAddress)
 
-	_ = d.robinCli.ReportClientPresence(ctx)
+	// 로컬 IPC 소켓 HTTP/SSE 서버 기동 (네이티브 UI 및 CLI 연동용)
+	if sockPath, err := config.SocketPath(); err == nil {
+		apiSrv := localapi.NewServer(d.cfg, d.robinCli, sockPath)
+		apiSrv.SetRemoteController(d)
+		go func() {
+			if err := apiSrv.Serve(ctx); err != nil && ctx.Err() == nil {
+				fmt.Printf("[daemon] 로컬 IPC 서버 경고: %v\n", err)
+			}
+		}()
+	} else {
+		fmt.Printf("[daemon] 로컬 소켓 경로 확인 실패: %v\n", err)
+	}
 
 	// 주기적 Presence 보고 및 재등록 루프
 	go func() {
@@ -108,12 +140,26 @@ func (d *Daemon) Serve(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case <-presenceTicker.C:
+				d.cfgMu.RLock()
+				enabled := d.cfg.IsRemoteEnabled()
+				d.cfgMu.RUnlock()
+				if !enabled {
+					continue
+				}
 				if err := d.robinCli.ReportClientPresence(ctx); err != nil {
 					fmt.Printf("[daemon] ReportClientPresence 경고: %v\n", err)
 				}
 			case <-registerTicker.C:
+				d.cfgMu.RLock()
+				enabled := d.cfg.IsRemoteEnabled()
+				d.cfgMu.RUnlock()
+				if !enabled {
+					continue
+				}
 				if _, err := d.robinCli.RegisterDevice(ctx); err != nil {
 					fmt.Printf("[daemon] 주기적 RegisterDevice 경고: %v\n", err)
+				} else {
+					d.markSynced()
 				}
 			}
 		}
@@ -125,6 +171,12 @@ func (d *Daemon) Serve(ctx context.Context) error {
 
 func (d *Daemon) handleWakeUpEvent(ctx context.Context, ev *proto.WakeUpEvent) {
 	if ev == nil || ev.SessionRoutingKey == "" {
+		return
+	}
+	d.cfgMu.RLock()
+	enabled := d.cfg.IsRemoteEnabled()
+	d.cfgMu.RUnlock()
+	if !enabled {
 		return
 	}
 	if ev.IsClientSyncHint {
@@ -167,6 +219,9 @@ func (d *Daemon) runSessionLoop(parentCtx, sessionCtx context.Context, routingKe
 			d.sessionMu.Lock()
 			entry.isIdle = idle
 			d.sessionMu.Unlock()
+		},
+		OnToolEvent: func(ev robin.ToolExecEvent) {
+			d.recordToolEvent(ev)
 		},
 	}
 
@@ -256,11 +311,21 @@ func (d *Daemon) acquireWakeUpSession(parent context.Context, routingKey, routin
 }
 
 func (d *Daemon) releaseSession(routingKey string, seq uint64) {
+	released := false
 	d.sessionMu.Lock()
-	defer d.sessionMu.Unlock()
 	if cur, exists := d.activeSessions[routingKey]; exists && cur.id == seq {
 		cur.cancel()
 		delete(d.activeSessions, routingKey)
+		released = true
+	}
+	d.sessionMu.Unlock()
+	if released {
+		d.recordToolEvent(robin.ToolExecEvent{
+			SessionID:     routingKey,
+			ToolName:      "remote_session",
+			Phase:         "session_ended",
+			TimestampUnix: time.Now().Unix(),
+		})
 	}
 }
 
