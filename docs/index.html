@@ -102,14 +102,14 @@ html[data-theme="light"] {
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; overflow-x: clip; }
 body {
   margin: 0;
   background: var(--glow) no-repeat, var(--bg);
   color: var(--ink);
   font: 400 16px/1.7 var(--sans);
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 html[data-lang="ko"] body { word-break: keep-all; }
 html[data-lang="ko"] [lang="en"], html[data-lang="en"] [lang="ko"] { display: none !important; }
@@ -119,8 +119,8 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 img { max-width: 100%; display: block; }
 code, pre, .mono { font-family: var(--mono); }
-code { font-size: 0.87em; background: var(--soft); padding: 0.14em 0.42em; border-radius: 6px; }
-pre code { background: none; padding: 0; font-size: 0.88rem; }
+code { font-size: 0.87em; background: var(--soft); padding: 0.14em 0.42em; border-radius: 6px; overflow-wrap: anywhere; }
+pre code { background: none; padding: 0; font-size: 0.88rem; overflow-wrap: normal; }
 button { font: inherit; color: inherit; cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [hidden] { display: none !important; }
@@ -146,6 +146,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   box-shadow: var(--shadow);
+  min-width: 0;
 }
 .brand {
   display: inline-flex;
@@ -157,10 +158,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: 15.5px;
   letter-spacing: -0.015em;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
 }
 .brand:hover { text-decoration: none; }
-.brand img { width: 28px; height: 28px; border-radius: 7px; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; flex: none; }
+.brand-name { overflow: hidden; text-overflow: ellipsis; }
 .brand .tag {
+  flex: none;
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
@@ -185,7 +190,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .nav a:hover { background: var(--soft); color: var(--ink); text-decoration: none; }
 
-.controls { display: flex; align-items: center; gap: 6px; }
+.controls { display: flex; align-items: center; gap: 6px; flex: none; }
 .pill-btn {
   display: inline-flex;
   align-items: center;
@@ -287,6 +292,8 @@ h1, h2, h3 { font-family: var(--display); margin: 0; line-height: 1.18; letter-s
   background: var(--accent-bg);
   padding: 2px 8px;
   border-radius: 999px;
+  white-space: nowrap;
+  flex: none;
 }
 
 /* Hero Window Frame */
@@ -297,6 +304,8 @@ h1, h2, h3 { font-family: var(--display); margin: 0; line-height: 1.18; letter-s
   box-shadow: var(--shadow);
   overflow: hidden;
   text-align: left;
+  min-width: 0;
+  max-width: 100%;
 }
 .stage-bar {
   display: flex;
@@ -307,11 +316,13 @@ h1, h2, h3 { font-family: var(--display); margin: 0; line-height: 1.18; letter-s
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
 }
-.stage-dots { display: flex; align-items: center; gap: 7px; }
-.stage-dots i { width: 10px; height: 10px; border-radius: 50%; display: block; background: var(--line-strong); }
-.stage-title { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); margin-left: 6px; }
-.stage-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.stage-dots { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; overflow: hidden; }
+.stage-dots i { width: 10px; height: 10px; border-radius: 50%; display: block; background: var(--line-strong); flex: none; }
+.stage-title { flex: 1; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); margin-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-tabs { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .stage-tab {
   border: 1px solid transparent;
   background: transparent;
@@ -396,6 +407,8 @@ section.block { padding: 64px 0 12px; }
   border-radius: var(--radius);
   padding: 22px;
   box-shadow: var(--shadow);
+  min-width: 0;
+  max-width: 100%;
 }
 .sim-top {
   display: flex;
@@ -466,12 +479,18 @@ section.block { padding: 64px 0 12px; }
   font-size: 12.8px;
   line-height: 1.65;
   overflow-x: auto;
+  max-width: 100%;
   margin: 0 0 16px;
 }
 .ps-box .c-dim { color: #7e8da8; }
 .ps-box .c-ok { color: #4ade80; font-weight: 600; }
 .ps-box .c-blue { color: #6ea8ff; font-weight: 600; }
 
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .cmp-table {
   width: 100%;
   border-collapse: collapse;
@@ -507,7 +526,9 @@ section.block { padding: 64px 0 12px; }
   align-items: flex-start;
   font-size: 14px;
   color: var(--ink-2);
+  min-width: 0;
 }
+.guard-list li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .guard-badge {
   flex: none;
   font-family: var(--mono);
@@ -611,6 +632,7 @@ section.block { padding: 64px 0 12px; }
   padding: 0 4px;
 }
 .arch-arrow b { display: block; font-size: 18px; color: var(--accent); line-height: 1.2; }
+.arch-arrow .arch-sep { display: block; font-size: 0; line-height: 0; }
 
 .tool-grid {
   display: grid;
@@ -650,18 +672,21 @@ section.block { padding: 64px 0 12px; }
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow);
+  min-width: 0;
+  max-width: 100%;
 }
 .code-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   font-family: var(--mono);
   font-size: 12.5px;
   color: #94a3b8;
 }
-.code-card pre { margin: 0; padding: 16px 18px; overflow-x: auto; line-height: 1.65; }
+.code-card pre { margin: 0; padding: 16px 18px; overflow-x: auto; max-width: 100%; line-height: 1.65; }
 .code-card .c-cm { color: #7c8ca8; }
 .code-card .c-cmd { color: #93c5fd; }
 .copy-btn {
@@ -740,18 +765,119 @@ footer {
 }
 .lb-cap { text-align: center; color: #cbd5e1; font-size: 13.5px; margin-top: 12px; }
 
+.arch-card, .shot-card, .feat-card, .tool-card, .metric, .arch-node {
+  min-width: 0;
+  max-width: 100%;
+}
+
 @media (max-width: 960px) {
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .cmp-grid, .guard-grid, .gallery-grid, .install-grid, .tool-grid { grid-template-columns: 1fr; }
+  .cmp-grid, .guard-grid, .gallery-grid, .install-grid, .tool-grid { grid-template-columns: minmax(0, 1fr); }
   .feat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .arch-flow { grid-template-columns: 1fr; }
+  .arch-flow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .arch-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 0;
+  }
   .arch-arrow b { transform: rotate(90deg); }
+  .arch-arrow .arch-sep { display: inline; font-size: inherit; line-height: inherit; }
   .nav { display: none; }
 }
 @media (max-width: 600px) {
-  .metrics, .feat-grid { grid-template-columns: 1fr; }
-  .hero { padding-top: 34px; }
+  .wrap { width: min(var(--wrap), 100% - 24px); }
+  .topbar { top: 8px; margin-top: 8px; }
+  .topbar-in { padding: 7px 9px 7px 10px; gap: 8px; border-radius: 14px; }
+  .brand { font-size: 13.5px; gap: 7px; }
+  .brand img { width: 24px; height: 24px; border-radius: 6px; }
   .brand .tag { display: none; }
+  .controls { gap: 5px; }
+  .pill-btn { padding: 5px 9px; font-size: 12.5px; border-radius: 9px; gap: 4px; }
+  #theme-toggle { padding: 5px 8px; }
+  #theme-toggle .btn-label { display: none; }
+
+  .hero { padding: 28px 0 26px; }
+  .eyebrow {
+    display: flex;
+    width: 100%;
+    text-align: left;
+    border-radius: 14px;
+    padding: 8px 12px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    margin-bottom: 16px;
+  }
+  .dot-live { flex: none; }
+  .hero h1 { font-size: clamp(1.7rem, 7.2vw, 2.2rem); margin-bottom: 14px; }
+  .hero .lead { font-size: 0.96rem; line-height: 1.65; margin-bottom: 22px; text-align: left; }
+
+  .cta-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .cta { justify-content: center; padding: 11px 10px; font-size: 13.5px; width: 100%; min-width: 0; }
+  .cta.primary { grid-column: 1 / -1; padding: 12px 16px; font-size: 14.5px; }
+  .cta.cmd { font-size: 12px; gap: 5px; }
+  .cta .copy-tag { font-size: 10.5px; padding: 2px 6px; }
+
+  .stage-frame { border-radius: 16px; }
+  .stage-bar { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; width: 100%; }
+  .stage-dots { width: 100%; }
+  .stage-title { font-size: 11.5px; }
+  .stage-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
+  .stage-tab { text-align: center; padding: 7px 6px; font-size: 12px; background: var(--soft); min-width: 0; }
+  .stage-caption { flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 12px; font-size: 12.5px; }
+
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+  .metric { padding: 13px 13px 12px; border-radius: 14px; }
+  .metric .k { font-size: 11px; }
+  .metric .v { font-size: 1.4rem; }
+  .metric .s { font-size: 12px; line-height: 1.45; }
+
+  section.block { padding: 44px 0 8px; }
+  .sec-head { margin-bottom: 20px; }
+  .sec-head h2 { font-size: 1.45rem; }
+  .sec-head p { font-size: 0.94rem; }
+
+  .card, .arch-card { padding: 16px; border-radius: 16px; }
+  .feat-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .feat-card, .tool-card { padding: 16px; }
+
+  .sim-top h3 { font-size: 1.04rem; }
+  .slider-row { gap: 8px; font-size: 12.5px; }
+  .bar-item .bar-meta { flex-direction: column; align-items: flex-start; gap: 2px; font-size: 13px; }
+  .bar-item .bar-meta .num { font-size: 12.5px; }
+  .ps-box { padding: 12px; font-size: 11.2px; line-height: 1.55; }
+
+  .cmp-table { font-size: 12px; }
+  .cmp-table th, .cmp-table td { padding: 8px 6px; }
+  .cmp-table th { font-size: 10.8px; }
+
+  .guard-list li { font-size: 13.5px; }
+  .code-card pre { padding: 13px 14px; }
+  .code-card pre code { font-size: 12px; }
+
+  .lb-bar { flex-wrap: wrap; gap: 8px; }
+  #lb-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .lb-btn { padding: 5px 10px; font-size: 12px; }
+
+  footer { margin-top: 48px; padding: 22px 0 34px; font-size: 12.5px; }
+}
+@media (max-width: 390px) {
+  .brand-suffix { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+  .cta:hover, .shot-card:hover { transform: none; }
 }
 </style>
 </head>
@@ -762,7 +888,7 @@ footer {
     <div class="topbar-in">
       <a class="brand" href="#top">
         <img src="./img/icon.svg" alt="gemini-desktop-linux icon" width="28" height="28">
-        <span>gemini-desktop-linux</span>
+        <span class="brand-name">gemini-desktop<span class="brand-suffix">-linux</span></span>
         <span class="tag">Rust + Go</span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
@@ -773,8 +899,8 @@ footer {
       </nav>
       <div class="controls">
         <button type="button" class="pill-btn" id="theme-toggle" aria-label="Toggle theme">
-          <span class="dark-only">☀ Light</span>
-          <span class="light-only">☾ Dark</span>
+          <span class="dark-only">☀<span class="btn-label"> Light</span></span>
+          <span class="light-only">☾<span class="btn-label"> Dark</span></span>
         </button>
         <button type="button" class="pill-btn" id="lang-toggle" aria-label="Switch language">
           <span lang="ko">EN</span>
@@ -948,12 +1074,13 @@ footer {
 
       <div class="card">
         <h3 style="margin-bottom:14px"><span lang="ko">핵심 항목 비교</span><span lang="en">Head-to-Head Breakdown</span></h3>
+        <div class="table-wrap">
         <table class="cmp-table">
           <thead>
             <tr>
               <th><span lang="ko">항목</span><span lang="en">Dimension</span></th>
-              <th>gemini-desktop-linux</th>
-              <th>Electron Client</th>
+              <th>Native (Rust+Go)</th>
+              <th>Electron</th>
             </tr>
           </thead>
           <tbody>
@@ -969,13 +1096,13 @@ footer {
             </tr>
             <tr>
               <td><span lang="ko">유휴 CPU</span><span lang="en">Idle CPU</span></td>
-              <td class="good">0.0% (리드로우 0)</td>
+              <td class="good">0.0% (<span lang="ko">리드로우 0</span><span lang="en">0 redraws</span>)</td>
               <td class="bad">Timers &amp; GC wakeups</td>
             </tr>
             <tr>
-              <td><span lang="ko">스트리밍 복잡도</span><span lang="en">Streaming</span></td>
-              <td class="good">O(delta) SSE + tail append</td>
-              <td class="bad">Full DOM diff / re-render</td>
+              <td><span lang="ko">스트리밍</span><span lang="en">Streaming</span></td>
+              <td class="good">O(delta) SSE + tail</td>
+              <td class="bad">Full DOM re-render</td>
             </tr>
             <tr>
               <td><span lang="ko">Linux 통합</span><span lang="en">Linux Native</span></td>
@@ -983,12 +1110,13 @@ footer {
               <td class="bad">No official Linux build</td>
             </tr>
             <tr>
-              <td><span lang="ko">성능 회귀 가드</span><span lang="en">Perf CI Guard</span></td>
+              <td><span lang="ko">성능 가드</span><span lang="en">Perf Guard</span></td>
               <td class="good">10 static checks</td>
               <td class="bad">—</td>
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -1101,7 +1229,7 @@ footer {
         </div>
         <div class="arch-arrow">
           <b>⇄</b>
-          Unix Socket 0600<br>SSE Delta
+          <span>Unix Socket 0600<span class="arch-sep"> · </span>SSE Delta</span>
         </div>
         <div class="arch-node daemon">
           <div class="role">GO 1.27 DAEMON</div>
@@ -1110,7 +1238,7 @@ footer {
         </div>
         <div class="arch-arrow">
           <b>⇄</b>
-          HTTPS / Stream<br>Bidirectional
+          <span>HTTPS / Stream<span class="arch-sep"> · </span>Bidirectional</span>
         </div>
         <div class="arch-node cloud">
           <div class="role">MULTI-DEVICE</div>
