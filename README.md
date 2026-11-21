@@ -1,6 +1,6 @@
 # gemini-desktop-linux
 
-[한국어 문서 (Korean)](./README.ko.md)
+[한국어 문서 (Korean)](./README.ko.md) · **[Project Homepage (gemini-desktop.ksyoon.com)](https://gemini-desktop.ksyoon.com/)**
 
 An unofficial **native Linux Gemini Desktop app (`gemini-ui`, Rust + `iced 0.14`)** and **remote PC execution daemon/CLI (`gemini-remote`, Go)** for Linux (Ubuntu, Arch, Fedora, Wayland/Hyprland, and X11).
 

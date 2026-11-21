@@ -1,0 +1,1409 @@
+<!doctype html>
+<html lang="ko" data-lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gemini-desktop-linux — Rust + Go 네이티브 Linux Gemini 데스크톱</title>
+<meta name="description" content="Electron 없이 Rust(iced 0.14) GUI와 Go 1.27 데몬으로 구현한 Linux 네이티브 Gemini 데스크톱 앱 & 원격 PC 제어. 5시간 연속 구동에도 ~116 MB RAM, 유휴 CPU 0.0%.">
+<link rel="canonical" href="https://gemini-desktop.ksyoon.com/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="gemini-desktop-linux — Native Rust + Go Gemini Desktop for Linux">
+<meta property="og:description" content="Full native Gemini Desktop UI (Rust iced 0.14) + bidirectional remote PC daemon (Go). ~116 MB total RAM and 0.0% idle CPU even after hours of uptime.">
+<meta property="og:url" content="https://gemini-desktop.ksyoon.com/">
+<meta property="og:image" content="https://gemini-desktop.ksyoon.com/img/og.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0b0f19">
+<link rel="icon" type="image/svg+xml" href="./img/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<script>
+  (function () {
+    var d = document.documentElement, lang, theme;
+    try {
+      lang = localStorage.getItem("gdl-lang");
+      theme = localStorage.getItem("gdl-theme");
+    } catch (e) {}
+    if (!lang) lang = /^ko/i.test(navigator.language || "") ? "ko" : "en";
+    if (!theme) theme = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    d.dataset.lang = lang;
+    d.lang = lang;
+    d.dataset.theme = theme;
+    d.classList.add("js");
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute("content", theme === "light" ? "#f6f8fc" : "#0b0f19");
+  })();
+</script>
+<style>
+:root {
+  --g-blue: #4285f4;
+  --g-red: #ea4335;
+  --g-yellow: #fbbc04;
+  --g-green: #34a853;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, -apple-system, sans-serif;
+  --display: "Space Grotesk", "IBM Plex Sans KR", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "D2Coding", monospace;
+  --wrap: 1140px;
+  --radius: 18px;
+}
+
+html[data-theme="dark"] {
+  --bg: #0b0f19;
+  --bg-elev: #111827;
+  --panel: rgba(18, 25, 42, 0.78);
+  --panel-solid: #131b2e;
+  --line: rgba(148, 163, 184, 0.16);
+  --line-strong: rgba(148, 163, 184, 0.28);
+  --ink: #edf2ff;
+  --ink-2: #a5b4cf;
+  --ink-3: #6e7f9d;
+  --soft: rgba(148, 163, 184, 0.1);
+  --accent: #6ea8ff;
+  --accent-bg: rgba(66, 133, 244, 0.15);
+  --accent-ink: #071226;
+  --ok: #4ade80;
+  --ok-bg: rgba(52, 168, 83, 0.14);
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --bad-bg: rgba(234, 67, 53, 0.14);
+  --code-bg: #080c15;
+  --code-ink: #e2ebff;
+  --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.72);
+  --glow: radial-gradient(62% 50% at 50% 0%, rgba(66, 133, 244, 0.22), transparent 68%),
+          radial-gradient(40% 35% at 86% 12%, rgba(52, 168, 83, 0.12), transparent 70%),
+          radial-gradient(36% 32% at 12% 18%, rgba(234, 67, 53, 0.10), transparent 70%);
+}
+
+html[data-theme="light"] {
+  --bg: #f6f8fc;
+  --bg-elev: #ffffff;
+  --panel: rgba(255, 255, 255, 0.84);
+  --panel-solid: #ffffff;
+  --line: rgba(15, 23, 42, 0.10);
+  --line-strong: rgba(15, 23, 42, 0.20);
+  --ink: #0f172a;
+  --ink-2: #475569;
+  --ink-3: #64748b;
+  --soft: rgba(15, 23, 42, 0.055);
+  --accent: #2563eb;
+  --accent-bg: rgba(37, 99, 235, 0.10);
+  --accent-ink: #ffffff;
+  --ok: #15803d;
+  --ok-bg: rgba(22, 163, 74, 0.10);
+  --warn: #b45309;
+  --bad: #dc2626;
+  --bad-bg: rgba(220, 38, 38, 0.09);
+  --code-bg: #0f172a;
+  --code-ink: #e2e8f0;
+  --shadow: 0 22px 54px -22px rgba(15, 23, 42, 0.18);
+  --glow: radial-gradient(62% 50% at 50% 0%, rgba(66, 133, 244, 0.15), transparent 68%),
+          radial-gradient(42% 35% at 88% 10%, rgba(52, 168, 83, 0.10), transparent 70%),
+          radial-gradient(36% 32% at 10% 18%, rgba(251, 188, 4, 0.10), transparent 70%);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+body {
+  margin: 0;
+  background: var(--glow) no-repeat, var(--bg);
+  color: var(--ink);
+  font: 400 16px/1.7 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+html[data-lang="ko"] body { word-break: keep-all; }
+html[data-lang="ko"] [lang="en"], html[data-lang="en"] [lang="ko"] { display: none !important; }
+html[data-theme="dark"] .light-only, html[data-theme="light"] .dark-only { display: none !important; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; display: block; }
+code, pre, .mono { font-family: var(--mono); }
+code { font-size: 0.87em; background: var(--soft); padding: 0.14em 0.42em; border-radius: 6px; }
+pre code { background: none; padding: 0; font-size: 0.88rem; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+.wrap { width: min(var(--wrap), 100% - 32px); margin-inline: auto; }
+
+/* Header */
+.topbar {
+  position: sticky;
+  top: 12px;
+  z-index: 30;
+  margin-top: 12px;
+}
+.topbar-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px 9px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 15.5px;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+.brand:hover { text-decoration: none; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; }
+.brand .tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ok);
+  background: var(--ok-bg);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.nav a {
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 10px;
+  transition: background 0.18s, color 0.18s;
+}
+.nav a:hover { background: var(--soft); color: var(--ink); text-decoration: none; }
+
+.controls { display: flex; align-items: center; gap: 6px; }
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: border-color 0.18s, background 0.18s;
+}
+.pill-btn:hover { border-color: var(--line-strong); text-decoration: none; }
+.pill-btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+.pill-btn.primary:hover { filter: brightness(1.06); }
+
+/* Hero */
+.hero { padding: 54px 0 40px; text-align: center; }
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+.dot-live {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px var(--ok-bg);
+}
+h1, h2, h3 { font-family: var(--display); margin: 0; line-height: 1.18; letter-spacing: -0.025em; }
+.hero h1 {
+  font-size: clamp(1.95rem, 4.3vw, 3.25rem);
+  font-weight: 700;
+  max-width: 980px;
+  margin: 0 auto 16px;
+  text-wrap: balance;
+}
+.grad-text {
+  background: linear-gradient(92deg, #4285f4 0%, #6ea8ff 38%, #34a853 76%, #fbbc04 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero .lead {
+  max-width: 740px;
+  margin: 0 auto 28px;
+  color: var(--ink-2);
+  font-size: clamp(1rem, 1.5vw, 1.16rem);
+}
+.hero .lead b { color: var(--ink); font-weight: 600; }
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 34px;
+}
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 13px;
+  font-size: 14.5px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  transition: transform 0.15s, border-color 0.18s, filter 0.18s;
+}
+.cta:hover { transform: translateY(-1px); border-color: var(--line-strong); text-decoration: none; }
+.cta.primary {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 12px 30px -12px rgba(37, 99, 235, 0.7);
+}
+.cta.cmd { font-family: var(--mono); font-size: 13.5px; }
+.cta .copy-tag {
+  font-family: var(--sans);
+  font-size: 11.5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* Hero Window Frame */
+.stage-frame {
+  border-radius: 20px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  text-align: left;
+}
+.stage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+.stage-dots { display: flex; align-items: center; gap: 7px; }
+.stage-dots i { width: 10px; height: 10px; border-radius: 50%; display: block; background: var(--line-strong); }
+.stage-title { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); margin-left: 6px; }
+.stage-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.stage-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.stage-tab:hover { background: var(--soft); color: var(--ink); }
+.stage-tab.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: rgba(66, 133, 244, 0.35);
+}
+.stage-media { position: relative; cursor: zoom-in; background: #0d1117; }
+.stage-media img { width: 100%; height: auto; aspect-ratio: 1860 / 1230; object-fit: cover; }
+.stage-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* Metrics Strip */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+.metric {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 18px 16px;
+  text-align: left;
+}
+.metric .k { font-size: 12.5px; color: var(--ink-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.metric .v {
+  font-family: var(--display);
+  font-size: clamp(1.55rem, 2.6vw, 2.05rem);
+  font-weight: 700;
+  margin: 4px 0 4px;
+  letter-spacing: -0.02em;
+}
+.metric .v.ok { color: var(--ok); }
+.metric .v.accent { color: var(--accent); }
+.metric .s { font-size: 13px; color: var(--ink-2); }
+
+/* Sections */
+section.block { padding: 64px 0 12px; }
+.sec-head { max-width: 760px; margin-bottom: 28px; }
+.sec-kicker {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-bg);
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 10px;
+}
+.sec-head h2 { font-size: clamp(1.6rem, 3.2vw, 2.35rem); margin-bottom: 10px; }
+.sec-head p { color: var(--ink-2); margin: 0; font-size: 1rem; }
+
+/* Comparison + Interactive Uptime Simulator */
+.cmp-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 18px;
+  align-items: stretch;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+.sim-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.sim-top h3 { font-size: 1.15rem; }
+.uptime-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-bg);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--g-blue);
+  cursor: pointer;
+}
+.bars { display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px; }
+.bar-item .bar-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13.5px;
+  margin-bottom: 6px;
+}
+.bar-item .bar-meta strong { color: var(--ink); }
+.bar-item .bar-meta .num { font-family: var(--mono); font-weight: 700; }
+.bar-item.native .num { color: var(--ok); }
+.bar-item.electron .num { color: var(--bad); }
+.track {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--soft);
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.bar-item.native .fill { background: linear-gradient(90deg, #22c55e, #3b82f6); }
+.bar-item.electron .fill { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+
+.sim-note { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; margin: 0; }
+
+.ps-box {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+  font-family: var(--mono);
+  font-size: 12.8px;
+  line-height: 1.65;
+  overflow-x: auto;
+  margin: 0 0 16px;
+}
+.ps-box .c-dim { color: #7e8da8; }
+.ps-box .c-ok { color: #4ade80; font-weight: 600; }
+.ps-box .c-blue { color: #6ea8ff; font-weight: 600; }
+
+.cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.cmp-table th, .cmp-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.cmp-table th { color: var(--ink-3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+.cmp-table td.good { color: var(--ok); font-weight: 600; }
+.cmp-table td.bad { color: var(--ink-2); }
+.cmp-table tr:last-child td { border-bottom: 0; }
+
+/* Performance Guard Cards */
+.guard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+.guard-list {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+  display: grid;
+  gap: 10px;
+}
+.guard-list li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.guard-badge {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  margin-top: 2px;
+}
+.guard-badge.go { background: var(--ok-bg); color: var(--ok); }
+.guard-list b { color: var(--ink); font-weight: 600; }
+
+/* Gallery */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.shot-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: transform 0.18s, border-color 0.18s;
+  cursor: zoom-in;
+}
+.shot-card:hover { transform: translateY(-2px); border-color: var(--line-strong); }
+.shot-card img { width: 100%; height: auto; aspect-ratio: 1860 / 1230; object-fit: cover; }
+.shot-card .meta { padding: 14px 16px; border-top: 1px solid var(--line); }
+.shot-card .meta h3 { font-size: 1rem; margin-bottom: 4px; }
+.shot-card .meta p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+
+/* Feature & Tool Cards */
+.feat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+.feat-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 20px;
+}
+.feat-card .ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+.feat-card h3 { font-size: 1.04rem; margin-bottom: 6px; }
+.feat-card p { margin: 0; font-size: 13.8px; color: var(--ink-2); }
+
+/* Architecture Diagram */
+.arch-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 18px;
+}
+.arch-flow {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  gap: 12px;
+  align-items: center;
+}
+.arch-node {
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  padding: 16px;
+}
+.arch-node .role {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.arch-node.daemon .role { color: var(--ok); }
+.arch-node.cloud .role { color: var(--warn); }
+.arch-node h3 { font-size: 1.05rem; margin-bottom: 6px; }
+.arch-node p { margin: 0; font-size: 13px; color: var(--ink-2); }
+.arch-arrow {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+  padding: 0 4px;
+}
+.arch-arrow b { display: block; font-size: 18px; color: var(--accent); line-height: 1.2; }
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.tool-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 20px;
+}
+.tool-card h3 { font-size: 1.02rem; margin-bottom: 6px; }
+.tool-card p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font-family: var(--mono);
+  font-size: 11.8px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: var(--soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+/* Install */
+.install-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  gap: 18px;
+  align-items: start;
+}
+.code-card {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: #94a3b8;
+}
+.code-card pre { margin: 0; padding: 16px 18px; overflow-x: auto; line-height: 1.65; }
+.code-card .c-cm { color: #7c8ca8; }
+.code-card .c-cmd { color: #93c5fd; }
+.copy-btn {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(148, 163, 184, 0.1);
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--sans);
+  font-weight: 600;
+}
+.copy-btn:hover { background: rgba(148, 163, 184, 0.2); }
+
+.req-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 9px; font-size: 13.8px; color: var(--ink-2); }
+.req-list b { color: var(--ink); }
+
+/* Footer */
+footer {
+  margin-top: 68px;
+  padding: 28px 0 42px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+.foot-in {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.foot-links { display: flex; flex-wrap: wrap; gap: 16px; }
+
+/* Lightbox */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(6, 10, 18, 0.90);
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+}
+.lb-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #e2e8f0;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+.lb-actions { display: flex; gap: 8px; }
+.lb-btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+.lb-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+.lb-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+}
+.lb-cap { text-align: center; color: #cbd5e1; font-size: 13.5px; margin-top: 12px; }
+
+@media (max-width: 960px) {
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cmp-grid, .guard-grid, .gallery-grid, .install-grid, .tool-grid { grid-template-columns: 1fr; }
+  .feat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .arch-flow { grid-template-columns: 1fr; }
+  .arch-arrow b { transform: rotate(90deg); }
+  .nav { display: none; }
+}
+@media (max-width: 600px) {
+  .metrics, .feat-grid { grid-template-columns: 1fr; }
+  .hero { padding-top: 34px; }
+  .brand .tag { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="topbar-in">
+      <a class="brand" href="#top">
+        <img src="./img/icon.svg" alt="gemini-desktop-linux icon" width="28" height="28">
+        <span>gemini-desktop-linux</span>
+        <span class="tag">Rust + Go</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="#why-native"><span lang="ko">왜 네이티브인가</span><span lang="en">Why Native</span></a>
+        <a href="#screenshots"><span lang="ko">실화면</span><span lang="en">Screenshots</span></a>
+        <a href="#architecture"><span lang="ko">아키텍처 · 23 도구</span><span lang="en">Architecture</span></a>
+        <a href="#install"><span lang="ko">설치</span><span lang="en">Install</span></a>
+      </nav>
+      <div class="controls">
+        <button type="button" class="pill-btn" id="theme-toggle" aria-label="Toggle theme">
+          <span class="dark-only">☀ Light</span>
+          <span class="light-only">☾ Dark</span>
+        </button>
+        <button type="button" class="pill-btn" id="lang-toggle" aria-label="Switch language">
+          <span lang="ko">EN</span>
+          <span lang="en">KO</span>
+        </button>
+        <a class="pill-btn primary" href="https://github.com/KyongSik-Yoon/gemini-desktop-linux" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero wrap">
+    <div class="eyebrow">
+      <span class="dot-live" aria-hidden="true"></span>
+      <span lang="ko">Electron 없이 Rust <code>iced 0.14</code> + Go 1.27로 완성한 Linux 네이티브 Gemini 데스크톱</span>
+      <span lang="en">Unofficial Native Gemini Desktop for Linux — Built with Rust <code>iced 0.14</code> + Go 1.27, Zero Electron</span>
+    </div>
+
+    <h1>
+      <span lang="ko">답답한 Electron 대신,<br><span class="grad-text">가볍고 즉각적인</span> Linux Gemini 데스크톱</span>
+      <span lang="en">Leave Heavy Electron Behind.<br><span class="grad-text">Native, Fast</span> Gemini Desktop on Linux.</span>
+    </h1>
+
+    <p class="lead">
+      <span lang="ko">
+        단순 CLI 브리지가 아닙니다. <b>Rust/iced 풀 네이티브 GUI(<code>gemini-ui</code>)</b>와 <b>Go 양방향 원격 데몬(<code>gemini-remote</code>)</b>으로
+        채팅·Canvas·라이브러리·예약 작업·노트북부터 23종 로컬/MCP 도구와 Wayland/X11 Computer Use까지 처리합니다.
+        오래 켜 두어도 메모리가 불어나지 않고, 유휴 CPU는 <b>0.0%</b>를 유지합니다.
+      </span>
+      <span lang="en">
+        Far beyond a CLI bridge. Combining a full <b>Rust + <code>iced 0.14</code> native GUI (<code>gemini-ui</code>)</b> and a
+        <b>Go remote execution daemon (<code>gemini-remote</code>)</b>, it brings chat, Canvas, Library, Schedules, Notebooks,
+        23 local/MCP tools, and Wayland/X11 Computer Use natively to Linux — staying flat in RAM with <b>0.0% idle CPU</b> all day.
+      </span>
+    </p>
+
+    <div class="cta-row">
+      <a class="cta primary" href="#install">
+        <span lang="ko">원커맨드 설치 시작하기</span>
+        <span lang="en">Quick Install</span>
+      </a>
+      <button type="button" class="cta cmd" id="hero-copy-cmd" data-copy="git clone https://github.com/KyongSik-Yoon/gemini-desktop-linux.git && cd gemini-desktop-linux && ./install.sh">
+        <span>./install.sh</span>
+        <span class="copy-tag" id="hero-copy-label"><span lang="ko">명령 복사</span><span lang="en">Copy</span></span>
+      </button>
+      <a class="cta" href="https://github.com/KyongSik-Yoon/gemini-desktop-linux" target="_blank" rel="noopener noreferrer">
+        <span lang="ko">GitHub 저장소 ↗</span>
+        <span lang="en">GitHub Repo ↗</span>
+      </a>
+    </div>
+
+    <!-- Interactive Hero Stage -->
+    <div class="stage-frame">
+      <div class="stage-bar">
+        <div class="stage-dots">
+          <i></i><i></i><i></i>
+          <span class="stage-title" id="stage-label">gemini-ui — Chat (Dark Theme · 1860×1230 HiDPI)</span>
+        </div>
+        <div class="stage-tabs" role="tablist" aria-label="App screenshots">
+          <button type="button" class="stage-tab active" data-shot="0" role="tab" aria-selected="true">
+            <span lang="ko">채팅 · 다크</span><span lang="en">Chat · Dark</span>
+          </button>
+          <button type="button" class="stage-tab" data-shot="1" role="tab" aria-selected="false">
+            <span lang="ko">채팅 · 라이트</span><span lang="en">Chat · Light</span>
+          </button>
+          <button type="button" class="stage-tab" data-shot="2" role="tab" aria-selected="false">
+            <span lang="ko">예약된 작업</span><span lang="en">Schedules</span>
+          </button>
+          <button type="button" class="stage-tab" data-shot="3" role="tab" aria-selected="false">
+            <span lang="ko">설정 &amp; 원격 PC</span><span lang="en">Settings &amp; Remote</span>
+          </button>
+        </div>
+      </div>
+      <div class="stage-media" id="stage-open-lb" title="Click to zoom">
+        <img id="stage-img" src="./img/chat-dark.webp" width="1860" height="1230" alt="gemini-ui desktop app screenshot">
+      </div>
+      <div class="stage-caption">
+        <span id="stage-cap-ko" lang="ko">다크 테마 채팅 화면 — GFM 표, Rust 구문 강조 코드블록, Canvas 문서 카드, 원격 PC 연결 상태</span>
+        <span id="stage-cap-en" lang="en">Dark theme chat — GFM tables, syntax-highlighted Rust code blocks, Canvas document card, and remote PC status</span>
+        <span class="mono" style="font-size:12px;color:var(--ink-3)"><span lang="ko">클릭하여 크게 보기 ↗</span><span lang="en">Click to zoom ↗</span></span>
+      </div>
+    </div>
+
+    <!-- Measured Telemetry Strip -->
+    <div class="metrics">
+      <div class="metric">
+        <div class="k"><span lang="ko">GUI 메모리 (5시간+ 구동)</span><span lang="en">GUI RAM (5h+ Uptime)</span></div>
+        <div class="v ok">92 MB</div>
+        <div class="s"><span lang="ko"><code>gemini-ui</code> Rust iced 0.14 실측 RSS</span><span lang="en">Measured RSS of Rust <code>gemini-ui</code></span></div>
+      </div>
+      <div class="metric">
+        <div class="k"><span lang="ko">원격 데몬 메모리</span><span lang="en">Daemon RAM</span></div>
+        <div class="v ok">24 MB</div>
+        <div class="s"><span lang="ko"><code>gemini-remote</code> Go 1.27 상주 데몬</span><span lang="en">Always-on Go <code>gemini-remote</code></span></div>
+      </div>
+      <div class="metric">
+        <div class="k"><span lang="ko">유휴 CPU 사용률</span><span lang="en">Idle CPU Usage</span></div>
+        <div class="v accent">0.0%</div>
+        <div class="s"><span lang="ko">상시 타이머 0 · 유휴 리드로우 0 원칙</span><span lang="en">Zero idle redraws &amp; filtered events</span></div>
+      </div>
+      <div class="metric">
+        <div class="k"><span lang="ko">로컬 · MCP · CUA 도구</span><span lang="en">Local · MCP · CUA Tools</span></div>
+        <div class="v">23 Tools</div>
+        <div class="s"><span lang="ko">Git · Obsidian · stdio MCP · Wayland/X11</span><span lang="en">Git, Obsidian, stdio MCP &amp; Wayland/X11</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 1: Why Native Rust + Go -->
+  <section class="block wrap" id="why-native">
+    <div class="sec-head">
+      <span class="sec-kicker">WHY NATIVE RUST + GO</span>
+      <h2>
+        <span lang="ko">오래 켜 둘수록 차이가 벌어지는 네이티브 구조</span>
+        <span lang="en">Why Native Beats Electron Over Long Sessions</span>
+      </h2>
+      <p>
+        <span lang="ko">
+          Electron 기반 데스크톱 클라이언트는 브라우저 엔진과 다중 렌더러 프로세스를 통째로 안고 돌아가므로,
+          하루 종일 열어두면 메모리가 수백 MB~1 GB 이상 불어나고 유휴 상태에서도 백그라운드 타이머·가비지 컬렉션으로 CPU를 소모합니다.
+          <code>gemini-desktop-linux</code>는 GUI와 네트워크 데몬을 네이티브 Rust와 Go로 분리해 처음부터 가볍게 설계했습니다.
+        </span>
+        <span lang="en">
+          Electron clients bundle a full Chromium runtime across multiple processes, often growing past hundreds of megabytes to over a gigabyte over long uptimes while burning background CPU cycles.
+          <code>gemini-desktop-linux</code> separates the UI (Rust) and daemon (Go) into lean native binaries engineered for flat resource usage.
+        </span>
+      </p>
+    </div>
+
+    <div class="cmp-grid">
+      <div class="card">
+        <div class="sim-top">
+          <h3><span lang="ko">장시간 구동 리소스 비교 시뮬레이터</span><span lang="en">Long-Uptime Resource Comparison</span></h3>
+          <span class="uptime-badge" id="uptime-label">5h</span>
+        </div>
+        <div class="slider-row">
+          <span><span lang="ko">연속 실행 시간</span><span lang="en">Continuous uptime</span></span>
+          <input type="range" id="uptime-slider" min="1" max="24" value="5" step="1" aria-label="Continuous uptime hours">
+          <span class="mono" style="min-width:34px;text-align:right" id="uptime-hr">5h</span>
+        </div>
+
+        <div class="bars">
+          <div class="bar-item native">
+            <div class="bar-meta">
+              <strong>gemini-desktop-linux (Rust + Go)</strong>
+              <span class="num" id="native-ram-txt">~116 MB · 0.0% idle CPU</span>
+            </div>
+            <div class="track"><div class="fill" id="native-ram-bar" style="width:10%"></div></div>
+          </div>
+
+          <div class="bar-item electron">
+            <div class="bar-meta">
+              <strong><span lang="ko">일반 Electron 기반 데스크톱 앱 (참고치)</span><span lang="en">Typical Electron Desktop App (reference)</span></strong>
+              <span class="num" id="electron-ram-txt">~690 MB · ~2.4% idle CPU</span>
+            </div>
+            <div class="track"><div class="fill" id="electron-ram-bar" style="width:58%"></div></div>
+          </div>
+        </div>
+
+        <pre class="ps-box"><span class="c-dim">$ ps -eo pid,comm,rss,pcpu,etime --sort=-rss | grep gemini-</span>
+    PID COMMAND           RSS %CPU     ELAPSED
+2616179 <span class="c-blue">gemini-ui</span>       <span class="c-ok">92200  0.0</span>    05:13:24
+2612874 <span class="c-blue">gemini-remote</span>   <span class="c-ok">24076  0.0</span>    05:13:50</pre>
+
+        <p class="sim-note">
+          <span lang="ko">※ 위 <code>ps</code> 출력은 실제 Linux(Wayland/Hyprland) 환경에서 5시간 13분 연속 구동 후 측정한 값입니다(합계 ~116 MB, CPU 0.0%). Electron 수치는 Chromium 다중 프로세스 기반 앱의 전형적인 장시간 점유 추세를 나타낸 참고 비교치입니다.</span>
+          <span lang="en">Note: The <code>ps</code> snippet is a real Linux (Wayland/Hyprland) measurement after 5h 13m of continuous uptime (~116 MB total, 0.0% CPU). Electron values illustrate typical multi-process Chromium desktop behavior for reference.</span>
+        </p>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:14px"><span lang="ko">핵심 항목 비교</span><span lang="en">Head-to-Head Breakdown</span></h3>
+        <table class="cmp-table">
+          <thead>
+            <tr>
+              <th><span lang="ko">항목</span><span lang="en">Dimension</span></th>
+              <th>gemini-desktop-linux</th>
+              <th>Electron Client</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span lang="ko">렌더링 엔진</span><span lang="en">UI Runtime</span></td>
+              <td class="good">Rust + iced 0.14 (GPU)</td>
+              <td class="bad">Chromium + V8</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">5시간+ RAM</span><span lang="en">5h+ RAM</span></td>
+              <td class="good">~116 MB (92 + 24)</td>
+              <td class="bad">500 MB – 1.2 GB+</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">유휴 CPU</span><span lang="en">Idle CPU</span></td>
+              <td class="good">0.0% (리드로우 0)</td>
+              <td class="bad">Timers &amp; GC wakeups</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">스트리밍 복잡도</span><span lang="en">Streaming</span></td>
+              <td class="good">O(delta) SSE + tail append</td>
+              <td class="bad">Full DOM diff / re-render</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">Linux 통합</span><span lang="en">Linux Native</span></td>
+              <td class="good">Wayland · Hyprland · X11</td>
+              <td class="bad">No official Linux build</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">성능 회귀 가드</span><span lang="en">Perf CI Guard</span></td>
+              <td class="good">10 static checks</td>
+              <td class="bad">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 10 Static Performance Invariants -->
+    <div class="guard-grid">
+      <div class="card">
+        <h3><span lang="ko">Rust / iced 0.14 프론트엔드 불변조건</span><span lang="en">Rust / iced 0.14 UI Invariants</span></h3>
+        <ul class="guard-list">
+          <li><span class="guard-badge">UI-01</span><span><b><span lang="ko">유휴 리드로우 0</span><span lang="en">Zero idle redraws</span></b> — <span lang="ko">상시 타이머 구독을 금지하고 <code>event::listen_with</code>로 필수 단축키·파일 드롭만 필터링해 마우스 이동·유휴 시 리빌드를 막습니다.</span><span lang="en">No always-on timers; <code>event::listen_with</code> filters only required shortcuts and drops to eliminate idle wakeups.</span></span></li>
+          <li><span class="guard-badge">UI-02</span><span><b><span lang="ko">O(delta) 증분 마크다운</span><span lang="en">O(delta) streaming Markdown</span></b> — <span lang="ko"><code>ParsedMarkdown::push_delta</code>로 끝 블록만 증분 추가하고 구조 재파싱(80ms)과 자동 스크롤(60ms)을 쓰로틀링합니다.</span><span lang="en">Appends tail text incrementally via <code>push_delta</code> while throttling structural re-parses (80ms) and autoscroll (60ms).</span></span></li>
+          <li><span class="guard-badge">UI-03</span><span><b><span lang="ko">프레임 할당 억제</span><span lang="en">Zero-clone frame paths</span></b> — <span lang="ko"><code>&amp;'a AppTheme</code> 참조 전달, <code>canvas::Cache</code> 지오메트리 캐시, <code>OnceLock</code> 정적 SVG, 인덱스 기반 지연 복사를 강제합니다.</span><span lang="en">Passes <code>&amp;'a AppTheme</code> by reference, caches geometry with <code>canvas::Cache</code>, reuses <code>OnceLock</code> SVGs, and defers copy lookups by index.</span></span></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3><span lang="ko">Go 1.27 백엔드 데몬 불변조건</span><span lang="en">Go 1.27 Daemon Invariants</span></h3>
+        <ul class="guard-list">
+          <li><span class="guard-badge go">GO-01</span><span><b><span lang="ko">커넥션 풀 · 업로더 재사용</span><span lang="en">Shared HTTP &amp; upload pools</span></b> — <span lang="ko">핸들러마다 임시 클라이언트를 만들지 않고 공용 HTTP/이미지/Scotty 업로더 풀을 재사용합니다.</span><span lang="en">Reuses shared HTTP, image, and Scotty uploader pools instead of allocating per-request clients.</span></span></li>
+          <li><span class="guard-badge go">GO-02</span><span><b><span lang="ko">취소 비전염 singleflight + TTL 캐시</span><span lang="en">Cancel-safe singleflight &amp; SWR</span></b> — <span lang="ko">중복 RPC를 병합하면서도 한 호출자의 취소가 공용 요청으로 번지지 않게 컨텍스트를 분리합니다.</span><span lang="en">Coalesces concurrent RPCs without propagating caller cancellation, keeping conversation switches non-blocking.</span></span></li>
+          <li><span class="guard-badge go">GO-03</span><span><b><span lang="ko">O(N) SSE 증분 델타 전송</span><span lang="en">O(N) SSE prefix deltas</span></b> — <span lang="ko"><code>compactStreamChunk</code>로 누적 본문 재전송(O(N²)) 대신 순수 증분 델타만 로컬 Unix 소켓(<code>0600</code>)으로 보냅니다.</span><span lang="en">Streams prefix deltas via <code>compactStreamChunk</code> over a <code>0600</code> Unix socket, avoiding O(N²) payload re-transmission.</span></span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 2: Screenshots & Desktop Features -->
+  <section class="block wrap" id="screenshots">
+    <div class="sec-head">
+      <span class="sec-kicker">FULL DESKTOP EXPERIENCE</span>
+      <h2>
+        <span lang="ko">실제 <code>gemini-ui</code> 화면과 데스크톱 기능</span>
+        <span lang="en">Real <code>gemini-ui</code> Screenshots &amp; Workspace Features</span>
+      </h2>
+      <p>
+        <span lang="ko">모든 스크린샷은 실제 <code>gemini-ui</code> 릴리즈 바이너리를 Wayland 환경에서 HiDPI로 캡처한 화면입니다. 클릭하면 원해상도로 확대됩니다.</span>
+        <span lang="en">Captured directly from the release <code>gemini-ui</code> binary on Wayland at HiDPI scale. Click any screen to inspect full resolution.</span>
+      </p>
+    </div>
+
+    <div class="gallery-grid">
+      <article class="shot-card" data-open-lb="0">
+        <img src="./img/chat-dark.webp" width="1860" height="1230" loading="lazy" alt="gemini-ui dark theme chat">
+        <div class="meta">
+          <h3><span lang="ko">채팅 · 다크 테마</span><span lang="en">Chat — Dark Theme</span></h3>
+          <p><span lang="ko">GFM 표 복사, 구문 강조 코드블록, Canvas 문서 카드, 원격 PC 연결 상태 표시</span><span lang="en">GFM tables with copy, syntax-highlighted code blocks, Canvas cards, and live remote status</span></p>
+        </div>
+      </article>
+      <article class="shot-card" data-open-lb="1">
+        <img src="./img/chat-light.webp" width="1860" height="1230" loading="lazy" alt="gemini-ui light theme chat">
+        <div class="meta">
+          <h3><span lang="ko">채팅 · 라이트 테마</span><span lang="en">Chat — Light Theme</span></h3>
+          <p><span lang="ko">시스템 및 Omarchy 테마를 실시간 자동 추종하며 설정에서 즉시 전환 가능</span><span lang="en">Follows system and Omarchy themes live with instant manual override in Settings</span></p>
+        </div>
+      </article>
+      <article class="shot-card" data-open-lb="2">
+        <img src="./img/schedules.webp" width="1860" height="1230" loading="lazy" alt="gemini-ui scheduled actions">
+        <div class="meta">
+          <h3><span lang="ko">예약된 작업 (Scheduled Actions)</span><span lang="en">Scheduled Actions</span></h3>
+          <p><span lang="ko">클라우드·로컬·추천 예약 관리, 활성/일시중지 필터, 완료 시 <code>notify-send</code> 알림</span><span lang="en">Cloud, local, and recommended automations with active/paused filters and desktop notifications</span></p>
+        </div>
+      </article>
+      <article class="shot-card" data-open-lb="3">
+        <img src="./img/settings.webp" width="1860" height="1230" loading="lazy" alt="gemini-ui settings and remote pc">
+        <div class="meta">
+          <h3><span lang="ko">설정 &amp; 원격 PC 제어</span><span lang="en">Settings &amp; Remote PC Control</span></h3>
+          <p><span lang="ko">사용 한도 게이지, 한/영 언어 전환, Punctual 스트림 상태, 23개 도구 및 허용 폴더 관리</span><span lang="en">Usage limit gauges, EN/KO switcher, Punctual link status, 23 tools, and allowed workspace folders</span></p>
+        </div>
+      </article>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <div class="ic">⌘K</div>
+        <h3><span lang="ko">통합 검색 &amp; 턴 점프</span><span lang="en">Full-Text Search &amp; Turn Jump</span></h3>
+        <p><span lang="ko"><code>Ctrl+K</code>로 대화 제목과 본문을 검색해 해당 턴으로 바로 스크롤하고, <code>Ctrl+N</code>·<code>Ctrl+B</code>·<code>Ctrl+,</code> 단축키를 지원합니다.</span><span lang="en">Search conversation titles and turns with <code>Ctrl+K</code>, jump straight to matching messages, and navigate via native shortcuts.</span></p>
+      </div>
+      <div class="feat-card">
+        <div class="ic">UI</div>
+        <h3><span lang="ko">올인원 워크스페이스 섹션</span><span lang="en">Complete Workspace Sections</span></h3>
+        <p><span lang="ko">라이브러리(Canvas·생성 이미지 지연 로드), 이미지·동영상 스튜디오, 노트북(소스-채팅 연동), 학생 학습, Gems, 맞춤설정을 모두 품었습니다.</span><span lang="en">Includes Library (lazy-loaded Canvas &amp; image thumbnails), Image/Video Studio, Notebooks, Student tools, Gems, and Personalize.</span></p>
+      </div>
+      <div class="feat-card">
+        <div class="ic">한A</div>
+        <h3><span lang="ko">한국어 / English &amp; 테마 자동 추종</span><span lang="en">EN / KO &amp; Live Theme Following</span></h3>
+        <p><span lang="ko">시스템 로케일을 감지해 한국어/영어를 자동 적용하고, PipeWire 음성 녹음·<code>xdg-desktop-portal</code> 파일 선택기·화면 공유까지 연동됩니다.</span><span lang="en">Auto-detects locale for English/Korean, follows system/Omarchy themes, and integrates native file pickers, screen capture, and PipeWire voice.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 3: Architecture & 23 Tools -->
+  <section class="block wrap" id="architecture">
+    <div class="sec-head">
+      <span class="sec-kicker">ARCHITECTURE &amp; REMOTE DAEMON</span>
+      <h2>
+        <span lang="ko">네이티브 UI + 양방향 원격 데몬 아키텍처</span>
+        <span lang="en">Native GUI + Bidirectional Remote Daemon Architecture</span>
+      </h2>
+      <p>
+        <span lang="ko">로컬 UI는 <code>0600</code> 권한의 Unix 소켓으로 데몬과 통신하고, <code>gemini-remote</code>는 모바일·웹·데스크톱 어디서 보낸 작업이든 허용된 폴더 안에서 안전하게 실행합니다.</span>
+        <span lang="en">The Rust GUI talks to the Go daemon over a <code>0600</code> Unix socket, while <code>gemini-remote</code> bridges Gemini Mobile, Web, and Linux with scoped local execution.</span>
+      </p>
+    </div>
+
+    <div class="arch-card">
+      <div class="arch-flow">
+        <div class="arch-node">
+          <div class="role">RUST · ICED 0.14</div>
+          <h3>gemini-ui</h3>
+          <p><span lang="ko">92 MB RSS · 유휴 CPU 0.0% · O(delta) 마크다운 · Canvas · 8개 워크스페이스 섹션</span><span lang="en">92 MB RSS · 0.0% idle CPU · O(delta) Markdown · Canvas · 8 workspace sections</span></p>
+        </div>
+        <div class="arch-arrow">
+          <b>⇄</b>
+          Unix Socket 0600<br>SSE Delta
+        </div>
+        <div class="arch-node daemon">
+          <div class="role">GO 1.27 DAEMON</div>
+          <h3>gemini-remote</h3>
+          <p><span lang="ko">24 MB RSS · singleflight 캐시 · 23종 로컬/MCP 도구 · Wayland/X11 CUA · notify-send</span><span lang="en">24 MB RSS · singleflight cache · 23 local/MCP tools · Wayland/X11 CUA · notifications</span></p>
+        </div>
+        <div class="arch-arrow">
+          <b>⇄</b>
+          HTTPS / Stream<br>Bidirectional
+        </div>
+        <div class="arch-node cloud">
+          <div class="role">MULTI-DEVICE</div>
+          <h3>Gemini Cloud · Mobile · Web</h3>
+          <p><span lang="ko">모바일·웹에서 Linux 워크스테이션 작업 지시, 대화 동기화, 예약 작업·Google Drive 첨부</span><span lang="en">Trigger Linux workstation tasks from Mobile or Web with synced history, schedules, and Drive</span></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tool-grid">
+      <div class="tool-card">
+        <h3><span lang="ko">셸 &amp; 코드 실행</span><span lang="en">Shell &amp; Code Execution</span></h3>
+        <p><span lang="ko">장기 백그라운드 명령 상태 추적, 표준 입력 전달, Python 즉시 실행</span><span lang="en">Background command tracking, interactive stdin forwarding, and direct Python execution</span></p>
+        <div class="chips">
+          <span class="chip">run_command</span><span class="chip">command_status</span><span class="chip">send_command_input</span><span class="chip">run_python</span>
+        </div>
+      </div>
+      <div class="tool-card">
+        <h3><span lang="ko">허용 폴더 파일 시스템 &amp; 탐색</span><span lang="en">Scoped Filesystem &amp; Search</span></h3>
+        <p><span lang="ko">등록된 폴더 범위 안에서만 파일 읽기·편집·부분 치환·패턴 검색 수행</span><span lang="en">Read, edit, multi-chunk patch, and grep strictly within explicitly allowed folders</span></p>
+        <div class="chips">
+          <span class="chip">read_file</span><span class="chip">write_file</span><span class="chip">replace_file_content</span><span class="chip">grep_search</span><span class="chip">find_by_name</span>
+        </div>
+      </div>
+      <div class="tool-card">
+        <h3><span lang="ko">스킬 &amp; 23종 MCP 브리지</span><span lang="en">Skills &amp; 23 MCP Tools</span></h3>
+        <p><span lang="ko">내장 Git(checkout/commit/diff/status)·Obsidian 및 외부 stdio MCP 서버 연동</span><span lang="en">Built-in Git (including checkout/commit), Obsidian vault tools, and external stdio MCP servers</span></p>
+        <div class="chips">
+          <span class="chip">list_skills</span><span class="chip">ReadSkill</span><span class="chip">list_mcp</span><span class="chip">execute_mcp</span><span class="chip">git / obsidian / stdio</span>
+        </div>
+      </div>
+      <div class="tool-card">
+        <h3><span lang="ko">Wayland / Hyprland &amp; X11 Computer Use</span><span lang="en">Wayland / Hyprland &amp; X11 Computer Use</span></h3>
+        <p><span lang="ko">순수 Python <code>zwlr_virtual_pointer_manager_v1</code> 가상 포인터, AT-SPI2 접근성 트리, X11 폴백</span><span lang="en">Pure-Python <code>zwlr_virtual_pointer_manager_v1</code> pointer, AT-SPI2 accessibility tree, and X11 fallback</span></p>
+        <div class="chips">
+          <span class="chip">ui_control</span><span class="chip">wlr-virtual-pointer</span><span class="chip">AT-SPI2</span><span class="chip">hyprctl / grim</span><span class="chip">xdotool</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 4: Install -->
+  <section class="block wrap" id="install">
+    <div class="sec-head">
+      <span class="sec-kicker">QUICK START</span>
+      <h2>
+        <span lang="ko">원커맨드 빌드 · 설치 및 시작하기</span>
+        <span lang="en">One-Command Build, Install &amp; Launch</span>
+      </h2>
+      <p>
+        <span lang="ko"><code>./install.sh</code> 한 번으로 <code>gemini-remote</code>(Go)와 <code>gemini-ui</code>(Rust release)를 빌드해 <code>~/.local/bin/</code>, 앱 런처(<code>.desktop</code>), 아이콘, <code>systemd</code> 사용자 서비스까지 자동 등록합니다.</span>
+        <span lang="en"><code>./install.sh</code> builds both binaries in release mode, installs them to <code>~/.local/bin/</code>, and registers the desktop launcher, app icon, and systemd user service.</span>
+      </p>
+    </div>
+
+    <div class="install-grid">
+      <div class="code-card">
+        <div class="code-head">
+          <span>bash — install &amp; setup</span>
+          <button type="button" class="copy-btn" data-copy-target="install-snippet">
+            <span lang="ko">복사</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="install-snippet"><code><span class="c-cm"># 1. Clone &amp; build both Go daemon + Rust GUI</span>
+<span class="c-cmd">git clone</span> https://github.com/KyongSik-Yoon/gemini-desktop-linux.git
+<span class="c-cmd">cd</span> gemini-desktop-linux
+<span class="c-cmd">./install.sh</span>
+
+<span class="c-cm"># 2. Configure OAuth client credentials &amp; sign in</span>
+<span class="c-cmd">gemini-remote</span> extract-keys /path/to/Gemini.app
+<span class="c-cmd">gemini-remote</span> login
+
+<span class="c-cm"># 3. Allow workspace folders &amp; start background daemon</span>
+<span class="c-cmd">gemini-remote</span> folders add ~/dev/git-repo
+<span class="c-cmd">gemini-remote</span> register
+<span class="c-cmd">gemini-remote</span> service install
+
+<span class="c-cm"># 4. Launch native Linux Gemini Desktop</span>
+<span class="c-cmd">gemini-ui</span></code></pre>
+      </div>
+
+      <div class="card">
+        <h3><span lang="ko">요구 사항 &amp; 검증</span><span lang="en">Requirements &amp; Verification</span></h3>
+        <ul class="req-list">
+          <li><b>OS:</b> Ubuntu, Arch / Omarchy, Fedora (Wayland / Hyprland &amp; X11)</li>
+          <li><b>Build:</b> Go 1.27+ · Rust 1.85+ (<code>edition = "2024"</code>)</li>
+          <li><b><span lang="ko">선택 도구</span><span lang="en">Optional</span>:</b> <code>xdg-desktop-portal</code>, <code>slurp</code>+<code>grim</code>, <code>pw-record</code>, <code>notify-send</code></li>
+          <li><b><span lang="ko">성능 가드</span><span lang="en">Perf Guard</span>:</b> <code>./scripts/perf-guard.sh --full</code></li>
+          <li><b><span lang="ko">제거</span><span lang="en">Uninstall</span>:</b> <code>./uninstall.sh</code></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <div>
+      <span lang="ko">비공식 커뮤니티 오픈소스 프로젝트 (MIT) · OAuth 시크릿·독점 에셋 미포함</span>
+      <span lang="en">Unofficial community open-source client (MIT) · No bundled OAuth secrets or proprietary assets</span>
+    </div>
+    <div class="foot-links">
+      <a href="https://github.com/KyongSik-Yoon/gemini-desktop-linux" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="https://github.com/KyongSik-Yoon/gemini-desktop-linux/blob/main/README.ko.md" target="_blank" rel="noopener noreferrer">README.ko</a>
+      <a href="https://ksyoon.com/" target="_blank" rel="noopener noreferrer">ksyoon.com ↗</a>
+    </div>
+  </div>
+</footer>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Image preview">
+  <div class="lb-bar">
+    <span id="lb-title" class="mono"></span>
+    <div class="lb-actions">
+      <button type="button" class="lb-btn" id="lb-prev">← Prev</button>
+      <button type="button" class="lb-btn" id="lb-next">Next →</button>
+      <button type="button" class="lb-btn" id="lb-close">Esc ✕</button>
+    </div>
+  </div>
+  <div class="lb-stage"><img id="lb-img" src="" alt=""></div>
+  <div class="lb-cap" id="lb-cap"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SHOTS = [
+    {
+      src: "./img/chat-dark.webp",
+      label: "gemini-ui — Chat (Dark Theme · 1860×1230 HiDPI)",
+      ko: "다크 테마 채팅 화면 — GFM 표, Rust 구문 강조 코드블록, Canvas 문서 카드, 원격 PC 연결 상태",
+      en: "Dark theme chat — GFM tables, syntax-highlighted Rust code blocks, Canvas document card, and remote PC status"
+    },
+    {
+      src: "./img/chat-light.webp",
+      label: "gemini-ui — Chat (Light Theme · 1860×1230 HiDPI)",
+      ko: "라이트 테마 채팅 화면 — 시스템·Omarchy 테마 실시간 추종 및 수동 전환 지원",
+      en: "Light theme chat — follows system and Omarchy themes live with instant manual override"
+    },
+    {
+      src: "./img/schedules.webp",
+      label: "gemini-ui — Scheduled Actions (1860×1230 HiDPI)",
+      ko: "예약된 작업(Scheduled Actions) — 클라우드·로컬·추천 예약 카드, 활성/일시중지 필터, 데스크톱 알림",
+      en: "Scheduled Actions — cloud, local, and recommended cards, active/paused filters, and desktop notifications"
+    },
+    {
+      src: "./img/settings.webp",
+      label: "gemini-ui — Settings & Remote PC Control (1860×1230 HiDPI)",
+      ko: "설정 모달 — 사용 한도 게이지, 테마·언어 전환, 원격 PC 연결 상태(23개 도구·허용 폴더)",
+      en: "Settings modal — usage limit gauges, theme/language switcher, and remote PC status (23 tools & allowed folders)"
+    }
+  ];
+
+  var curShot = document.documentElement.dataset.theme === "light" ? 1 : 0;
+  var stageImg = document.getElementById("stage-img");
+  var stageLabel = document.getElementById("stage-label");
+  var stageCapKo = document.getElementById("stage-cap-ko");
+  var stageCapEn = document.getElementById("stage-cap-en");
+  var stageTabs = Array.prototype.slice.call(document.querySelectorAll(".stage-tab"));
+
+  function setStage(idx) {
+    curShot = (idx + SHOTS.length) % SHOTS.length;
+    var s = SHOTS[curShot];
+    stageImg.src = s.src;
+    stageLabel.textContent = s.label;
+    stageCapKo.textContent = s.ko;
+    stageCapEn.textContent = s.en;
+    stageTabs.forEach(function (btn, i) {
+      var on = i === curShot;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+  setStage(curShot);
+
+  stageTabs.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      setStage(parseInt(btn.dataset.shot, 10) || 0);
+    });
+  });
+
+  // Theme & Language toggles
+  document.getElementById("theme-toggle").addEventListener("click", function () {
+    var d = document.documentElement;
+    var next = d.dataset.theme === "dark" ? "light" : "dark";
+    d.dataset.theme = next;
+    try { localStorage.setItem("gdl-theme", next); } catch (e) {}
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute("content", next === "light" ? "#f6f8fc" : "#0b0f19");
+    if (curShot === 0 || curShot === 1) setStage(next === "light" ? 1 : 0);
+  });
+
+  document.getElementById("lang-toggle").addEventListener("click", function () {
+    var d = document.documentElement;
+    var next = d.dataset.lang === "ko" ? "en" : "ko";
+    d.dataset.lang = next;
+    d.lang = next;
+    try { localStorage.setItem("gdl-lang", next); } catch (e) {}
+    if (!lb.hidden) renderLb();
+  });
+
+  // Uptime simulator
+  var slider = document.getElementById("uptime-slider");
+  var upLabel = document.getElementById("uptime-label");
+  var upHr = document.getElementById("uptime-hr");
+  var nTxt = document.getElementById("native-ram-txt");
+  var eTxt = document.getElementById("electron-ram-txt");
+  var nBar = document.getElementById("native-ram-bar");
+  var eBar = document.getElementById("electron-ram-bar");
+
+  function updateSim() {
+    var h = parseInt(slider.value, 10) || 5;
+    // Measured 5h+ anchor: ~116 MB flat; minimal variance over 1..24h
+    var nativeMb = Math.round(112 + Math.min(h, 6) * 0.7);
+    // Typical Chromium/Electron client: ~460 MB baseline + gradual tab/session growth
+    var electronMb = Math.round(460 + h * 46);
+    var electronCpu = (1.4 + Math.min(h, 24) * 0.2).toFixed(1);
+    var maxMb = 1600;
+    upLabel.textContent = h + "h";
+    upHr.textContent = h + "h";
+    nTxt.textContent = "~" + nativeMb + " MB · 0.0% idle CPU";
+    eTxt.textContent = "~" + electronMb + " MB · ~" + electronCpu + "% idle CPU";
+    nBar.style.width = Math.max(6, Math.round((nativeMb / maxMb) * 100)) + "%";
+    eBar.style.width = Math.min(100, Math.round((electronMb / maxMb) * 100)) + "%";
+  }
+  slider.addEventListener("input", updateSim);
+  updateSim();
+
+  // Copy helpers
+  function copyText(text, btn) {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(text).then(function () {
+      var orig = btn.innerHTML;
+      var isKo = document.documentElement.dataset.lang === "ko";
+      btn.textContent = isKo ? "복사됨 ✓" : "Copied ✓";
+      setTimeout(function () { btn.innerHTML = orig; }, 1600);
+    }).catch(function () {});
+  }
+
+  var heroCopyBtn = document.getElementById("hero-copy-cmd");
+  var heroCopyLabel = document.getElementById("hero-copy-label");
+  heroCopyBtn.addEventListener("click", function () {
+    copyText(heroCopyBtn.dataset.copy, heroCopyLabel);
+  });
+
+  document.querySelectorAll("[data-copy-target]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = document.getElementById(btn.dataset.copyTarget);
+      if (el) copyText(el.innerText.trim(), btn);
+    });
+  });
+
+  // Lightbox
+  var lb = document.getElementById("lightbox");
+  var lbImg = document.getElementById("lb-img");
+  var lbTitle = document.getElementById("lb-title");
+  var lbCap = document.getElementById("lb-cap");
+  var lbIdx = 0;
+
+  function renderLb() {
+    var s = SHOTS[lbIdx];
+    lbImg.src = s.src;
+    lbImg.alt = s.label;
+    lbTitle.textContent = s.label + " (" + (lbIdx + 1) + "/" + SHOTS.length + ")";
+    lbCap.textContent = document.documentElement.dataset.lang === "ko" ? s.ko : s.en;
+  }
+  function openLb(idx) {
+    lbIdx = (idx + SHOTS.length) % SHOTS.length;
+    renderLb();
+    lb.hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+  function closeLb() {
+    lb.hidden = true;
+    document.body.style.overflow = "";
+  }
+
+  document.getElementById("stage-open-lb").addEventListener("click", function () { openLb(curShot); });
+  document.querySelectorAll("[data-open-lb]").forEach(function (el) {
+    el.addEventListener("click", function () { openLb(parseInt(el.dataset.openLb, 10) || 0); });
+  });
+  document.getElementById("lb-prev").addEventListener("click", function () { lbIdx = (lbIdx - 1 + SHOTS.length) % SHOTS.length; renderLb(); });
+  document.getElementById("lb-next").addEventListener("click", function () { lbIdx = (lbIdx + 1) % SHOTS.length; renderLb(); });
+  document.getElementById("lb-close").addEventListener("click", closeLb);
+  lb.addEventListener("click", function (e) { if (e.target === lb) closeLb(); });
+  document.addEventListener("keydown", function (e) {
+    if (lb.hidden) return;
+    if (e.key === "Escape") closeLb();
+    else if (e.key === "ArrowLeft") { lbIdx = (lbIdx - 1 + SHOTS.length) % SHOTS.length; renderLb(); }
+    else if (e.key === "ArrowRight") { lbIdx = (lbIdx + 1) % SHOTS.length; renderLb(); }
+  });
+})();
+</script>
+</body>
+</html>

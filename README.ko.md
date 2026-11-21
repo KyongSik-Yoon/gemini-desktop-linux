@@ -1,6 +1,6 @@
 # gemini-desktop-linux
 
-[English](./README.md)
+[English](./README.md) · **[프로젝트 홈페이지 (gemini-desktop.ksyoon.com)](https://gemini-desktop.ksyoon.com/)**
 
 Ubuntu, Arch, Fedora, Wayland/Hyprland, X11 환경에서 동작하는 비공식 **Linux 네이티브 Gemini 데스크톱 앱(`gemini-ui`, Rust + `iced 0.14`)**과 **원격 PC 실행 데몬·CLI(`gemini-remote`, Go)**입니다.
 
