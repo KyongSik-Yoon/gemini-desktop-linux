@@ -1310,7 +1310,7 @@ impl App {
                 button(
                     column![
                         Icon::Notebook.view(16.0, text_secondary),
-                        text(truncate_single_line(&nb.title, 18))
+                        text(truncate_single_line(t(loc, &nb.title), 18))
                             .size(13)
                             .font(font_medium())
                             .color(text_strong),
@@ -1453,7 +1453,7 @@ impl App {
                                     }),
                             ]
                             .align_y(Alignment::Center),
-                            text(truncate_single_line(&nb.title, 22))
+                            text(truncate_single_line(t(loc, &nb.title), 22))
                                 .size(13.5)
                                 .font(font_semibold())
                                 .color(text_strong),

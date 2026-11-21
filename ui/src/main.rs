@@ -2237,35 +2237,36 @@ impl App {
                     self.active_project_id = Some(nb.id.clone());
                 }
                 self.attached_files = files;
+                let nb_title = t(self.locale, &nb.title);
                 let prompt = if notes.is_empty() {
                     if self.locale.is_en() {
                         format!(
                             "[Notebook: {}] Analyze the attached source materials and summarize the key points.",
-                            nb.title
+                            nb_title
                         )
                     } else {
                         format!(
                             "[노트북: {}] 첨부된 소스 자료를 분석하고 핵심 내용을 요약해 주세요.",
-                            nb.title
+                            nb_title
                         )
                     }
                 } else if self.locale.is_en() {
                     format!(
                         "[Notebook: {}]\nNotes context:\n{}\n\nSummarize the key points from these notes and attached sources and get ready for questions.",
-                        nb.title, notes
+                        nb_title, notes
                     )
                 } else {
                     format!(
                         "[노트북: {}]\n메모 컨텍스트:\n{}\n\n위 메모와 첨부 소스를 바탕으로 핵심을 정리하고 질문할 준비를 해 주세요.",
-                        nb.title, notes
+                        nb_title, notes
                     )
                 };
                 self.composer = text_editor::Content::with_text(&prompt);
                 self.composer_has_text = !prompt.trim().is_empty();
                 self.show_toast(if self.locale.is_en() {
-                    format!("Connected sources from notebook '{}' to chat", nb.title)
+                    format!("Connected sources from notebook '{}' to chat", nb_title)
                 } else {
-                    format!("노트북 '{}' 소스가 채팅에 연결되었습니다", nb.title)
+                    format!("노트북 '{}' 소스가 채팅에 연결되었습니다", nb_title)
                 });
                 Task::none()
             }

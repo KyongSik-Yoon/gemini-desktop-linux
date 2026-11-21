@@ -954,7 +954,7 @@ impl App {
                     button(
                         row![
                             Icon::Notebook.view(13.0, text_secondary),
-                            text(truncate_single_line(&nb.title, 20))
+                            text(truncate_single_line(t(loc, &nb.title), 20))
                                 .size(12.5)
                                 .color(text_primary),
                         ]
