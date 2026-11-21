@@ -8,6 +8,24 @@ Ubuntu, Arch, Fedora, Wayland/Hyprland, X11 환경에서 동작하는 비공식 
 
 > **안내**: 비공식 커뮤니티 클라이언트입니다. 저장소에는 어떠한 OAuth 시크릿·토큰·독점 에셋도 포함되지 않으며, 사용자가 직접 OAuth 자격증명을 설정하고 Google 계정으로 로그인해야 합니다.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/screenshots/chat-dark.webp" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/screenshots/chat-light.webp" />
+    <img alt="gemini-ui Linux 네이티브 데스크톱 채팅 화면" src="./assets/screenshots/chat-light.webp" width="100%" />
+  </picture>
+</p>
+
+## 스크린샷
+
+| 채팅 — 라이트 테마 | 채팅 — 다크 테마 |
+| :---: | :---: |
+| ![채팅 라이트 테마](./assets/screenshots/chat-light.webp) | ![채팅 다크 테마](./assets/screenshots/chat-dark.webp) |
+
+| 예약된 작업 (Scheduled Actions) | 설정 & 원격 PC 제어 상태 |
+| :---: | :---: |
+| ![예약된 작업](./assets/screenshots/schedules.webp) | ![설정 및 원격 PC 제어](./assets/screenshots/settings.webp) |
+
 ## 주요 기능
 
 - **네이티브 Linux 데스크톱 GUI (`gemini-ui`, Rust + `iced 0.14`)**

@@ -8,6 +8,24 @@ Use the full Gemini Desktop experience natively on Linux — and connect your Li
 
 > **Disclaimer**: This is an unofficial community client using Gemini desktop protocols. No OAuth secrets, tokens, or proprietary assets are bundled — you must supply your own OAuth client credentials and sign in with your Google account.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/screenshots/chat-dark.webp" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/screenshots/chat-light.webp" />
+    <img alt="gemini-ui native Linux desktop chat interface" src="./assets/screenshots/chat-light.webp" width="100%" />
+  </picture>
+</p>
+
+## Screenshots
+
+| Chat — Light Theme | Chat — Dark Theme |
+| :---: | :---: |
+| ![Chat Light](./assets/screenshots/chat-light.webp) | ![Chat Dark](./assets/screenshots/chat-dark.webp) |
+
+| Scheduled Actions | Settings & Remote PC Control |
+| :---: | :---: |
+| ![Scheduled Actions](./assets/screenshots/schedules.webp) | ![Settings & Remote PC Control](./assets/screenshots/settings.webp) |
+
 ## Key Features
 
 - **Native Linux Desktop GUI (`gemini-ui`, Rust + `iced 0.14`)**
