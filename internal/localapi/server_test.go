@@ -214,3 +214,36 @@ func TestHandleFeedbackRequiresConversationID(t *testing.T) {
 		t.Fatalf("conversation_id 누락 시 400이어야 함: got %d", rec.Code)
 	}
 }
+
+func TestPreferencesCloseToTrayDefaultAndPatch(t *testing.T) {
+	dir := t.TempDir()
+	st := &WorkspaceStore{
+		dir:           dir,
+		runningScheds: make(map[string]bool),
+	}
+	st.load()
+
+	prefs := st.GetPreferences()
+	if prefs.CloseToTray == nil || !*prefs.CloseToTray {
+		t.Fatalf("기본 close_to_tray는 true여야 함: %+v", prefs.CloseToTray)
+	}
+
+	updated, err := st.PatchPreferences(map[string]any{"close_to_tray": false})
+	if err != nil {
+		t.Fatalf("PatchPreferences 실패: %v", err)
+	}
+	if updated.CloseToTray == nil || *updated.CloseToTray {
+		t.Fatalf("close_to_tray=false 패치 실패: %+v", updated.CloseToTray)
+	}
+
+	// 디스크에서 재로드해도 false가 유지되어야 한다.
+	st2 := &WorkspaceStore{
+		dir:           dir,
+		runningScheds: make(map[string]bool),
+	}
+	st2.load()
+	reloaded := st2.GetPreferences()
+	if reloaded.CloseToTray == nil || *reloaded.CloseToTray {
+		t.Fatalf("재로드 후 close_to_tray=false가 유지되어야 함: %+v", reloaded.CloseToTray)
+	}
+}

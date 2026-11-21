@@ -476,6 +476,10 @@ pub struct UsageInfo {
     pub support_url: String,
 }
 
+fn default_close_to_tray() -> bool {
+    true
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UIPreferences {
@@ -491,6 +495,8 @@ pub struct UIPreferences {
     pub personal_intelligence: bool,
     #[serde(default)]
     pub custom_instructions: String,
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
 }
 
 #[allow(dead_code)]

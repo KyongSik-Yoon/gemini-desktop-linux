@@ -63,7 +63,7 @@ type LibraryEntry struct {
 	CreatedAtUnix  int64  `json:"created_at_unix"`
 }
 
-// UIPreferences는 앱의 영속 환경설정(모델, 사고 수준, 테마, 언어, 개인 인텔리전스, 지침 등)이다.
+// UIPreferences는 앱의 영속 환경설정(모델, 사고 수준, 테마, 언어, 개인 인텔리전스, 지침, 트레이 최소화 등)이다.
 type UIPreferences struct {
 	SelectedModelID      string              `json:"selected_model_id,omitempty"`
 	ThinkingLevel        int32               `json:"thinking_level,omitempty"` // 0: 자동, 1: 낮음, 4: 보통, 2: 높음
@@ -71,6 +71,7 @@ type UIPreferences struct {
 	Language             string              `json:"language,omitempty"`       // system, ko, en
 	PersonalIntelligence bool                `json:"personal_intelligence"`
 	CustomInstructions   string              `json:"custom_instructions,omitempty"`
+	CloseToTray          *bool               `json:"close_to_tray,omitempty"`
 	UnreadOverrides      map[string]bool     `json:"unread_overrides,omitempty"`
 	NotebookLinks        map[string][]string `json:"notebook_links,omitempty"`
 }
@@ -128,6 +129,10 @@ func (st *WorkspaceStore) load() {
 	if st.prefs.ThinkingLevel == 0 {
 		st.prefs.ThinkingLevel = proto.ThinkingLevelMedium
 	}
+	if st.prefs.CloseToTray == nil {
+		defaultTray := true
+		st.prefs.CloseToTray = &defaultTray
+	}
 	if st.prefs.UnreadOverrides == nil {
 		st.prefs.UnreadOverrides = map[string]bool{}
 	}
@@ -142,6 +147,10 @@ func (st *WorkspaceStore) GetPreferences() UIPreferences {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	cp := st.prefs
+	if st.prefs.CloseToTray != nil {
+		v := *st.prefs.CloseToTray
+		cp.CloseToTray = &v
+	}
 	cp.UnreadOverrides = make(map[string]bool, len(st.prefs.UnreadOverrides))
 	for k, v := range st.prefs.UnreadOverrides {
 		cp.UnreadOverrides[k] = v
@@ -181,6 +190,10 @@ func (st *WorkspaceStore) PatchPreferences(patch map[string]any) (UIPreferences,
 	}
 	if v, ok := patch["custom_instructions"].(string); ok {
 		st.prefs.CustomInstructions = v
+	}
+	if v, ok := patch["close_to_tray"].(bool); ok {
+		b := v
+		st.prefs.CloseToTray = &b
 	}
 	if err := st.saveFileLocked("ui_prefs.json", st.prefs); err != nil {
 		return st.prefs, err

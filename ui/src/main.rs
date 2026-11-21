@@ -8,6 +8,7 @@ mod markdown_view;
 mod pages;
 mod popovers;
 mod theme;
+mod tray;
 
 use capture::VoiceRecorder;
 use glow::{AvatarCircleMask, WelcomeGlow};
@@ -70,20 +71,24 @@ pub(crate) fn feature_mode_label(mode: i32) -> Option<&'static str> {
 }
 
 fn main() -> iced::Result {
-    iced::application(App::new, App::update, App::view)
+    let launch_mode = match tray::LaunchMode::from_args(std::env::args()) {
+        Ok(mode) => mode,
+        Err(help) => {
+            print!("{help}");
+            return Ok(());
+        }
+    };
+
+    if tray::try_activate_existing_instance(launch_mode) {
+        return Ok(());
+    }
+
+    let start_hidden = launch_mode == tray::LaunchMode::StartInTray;
+    iced::daemon(move || App::new(start_hidden), App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
         .theme(App::theme)
         .default_font(font_regular())
-        .window(window::Settings {
-            size: Size::new(1240.0, 860.0),
-            min_size: Some(Size::new(780.0, 560.0)),
-            platform_specific: window::settings::PlatformSpecific {
-                application_id: "gemini-ui".into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
         .run()
 }
 
@@ -361,6 +366,12 @@ pub(crate) struct App {
     welcome_glow_cache: canvas::Cache,
     avatar_mask_cache: canvas::Cache,
 
+    // 창 생명주기 · 시스템 트레이
+    main_window: Option<window::Id>,
+    close_to_tray: bool,
+    tray_available: bool,
+    tray_tx: Option<tray::TrayUpdateSender>,
+
     error_banner: Option<String>,
     toast: Option<(String, u8)>,
 }
@@ -371,6 +382,11 @@ pub(crate) enum Message {
     OmarchyThemeChanged(String),
     SystemThemeChanged(iced::theme::Mode),
     RuntimeEvent(Event),
+    WindowOpened(window::Id),
+    WindowCloseRequested(window::Id),
+    WindowClosed(window::Id),
+    TrayEventReceived(tray::TrayEvent),
+    ToggleCloseToTray,
 
     // 초기 및 동기화 응답
     HealthLoaded(Result<HealthResponse, String>),
@@ -555,11 +571,30 @@ pub(crate) enum Message {
 }
 
 impl App {
-    fn new() -> (Self, Task<Message>) {
+    fn main_window_settings() -> window::Settings {
+        window::Settings {
+            size: Size::new(1240.0, 860.0),
+            min_size: Some(Size::new(780.0, 560.0)),
+            exit_on_close_request: false,
+            platform_specific: window::settings::PlatformSpecific {
+                application_id: "gemini-ui".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn new(start_hidden: bool) -> (Self, Task<Message>) {
         let palette = AppTheme::load_with_mode(ThemeMode::System, false);
         let cached_iced_theme = palette.to_iced_theme();
         let language_pref = LanguagePref::System;
         let locale = language_pref.resolve();
+        let (main_window, open_window_task) = if start_hidden {
+            (None, Task::none())
+        } else {
+            let (id, task) = window::open(Self::main_window_settings());
+            (Some(id), task.map(Message::WindowOpened))
+        };
         let app = Self {
             palette,
             cached_iced_theme,
@@ -664,11 +699,16 @@ impl App {
             stream_had_attachments: false,
             welcome_glow_cache: canvas::Cache::new(),
             avatar_mask_cache: canvas::Cache::new(),
+            main_window,
+            close_to_tray: true,
+            tray_available: false,
+            tray_tx: None,
             error_banner: None,
             toast: None,
         };
 
         let init = Task::batch([
+            open_window_task,
             system::theme().map(Message::SystemThemeChanged),
             Task::perform(ipc::health(), Message::HealthLoaded),
             Task::perform(ipc::get_profile(), Message::ProfileLoaded),
@@ -686,7 +726,7 @@ impl App {
         (app, init)
     }
 
-    fn title(&self) -> String {
+    fn title(&self, _window: window::Id) -> String {
         if self.active_title.is_empty() {
             "Gemini".into()
         } else {
@@ -694,8 +734,120 @@ impl App {
         }
     }
 
-    fn theme(&self) -> Theme {
+    fn theme(&self, _window: window::Id) -> Theme {
         self.cached_iced_theme.clone()
+    }
+
+    fn sync_tray_state(&self) {
+        if let Some(tx) = &self.tray_tx {
+            tx.sync(
+                self.main_window.is_some(),
+                self.locale,
+                self.daemon_connected,
+                self.remote_status.remote_enabled,
+                self.remote_status.punctual_connected,
+                &self.remote_status.current_tool,
+                self.is_streaming,
+            );
+        }
+    }
+
+    fn open_or_focus_window(&mut self) -> Task<Message> {
+        if let Some(id) = self.main_window {
+            return window::gain_focus(id);
+        }
+        let (id, open_task) = window::open(Self::main_window_settings());
+        self.main_window = Some(id);
+        open_task.map(Message::WindowOpened)
+    }
+
+    fn hide_window_to_tray(&mut self) -> Task<Message> {
+        if let Some(id) = self.main_window.take() {
+            self.release_hidden_window_caches();
+            window::close(id)
+        } else {
+            Task::none()
+        }
+    }
+
+    /// 창을 트레이로 숨길 때 재생성 가능한 이미지·캔버스 캐시와 토스트 타이머를 비워 백그라운드 RAM·깨어남을 줄인다.
+    fn release_hidden_window_caches(&mut self) {
+        self.library_image_cache.clear();
+        self.library_image_order.clear();
+        self.failed_image_keys.clear();
+        self.clear_canvas_caches();
+        self.toast = None;
+    }
+
+    fn sync_system_theme_if_needed(&mut self) {
+        if self.theme_mode == ThemeMode::System {
+            let cur = AppTheme::current_omarchy_generation().unwrap_or_default();
+            if cur != self.palette.generation {
+                let next = AppTheme::load_with_mode(self.theme_mode, self.system_dark_fallback);
+                self.set_palette(next);
+            }
+        }
+    }
+
+    fn preload_active_chat_images(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        let mut preload_count = 0usize;
+        for msg in &self.messages {
+            for att in &msg.attachment_items {
+                if preload_count < 24 && is_attachment_image(att) && !att.url.is_empty() {
+                    let key = markdown_view::turn_attachment_cache_key(&att.url);
+                    if !self.library_image_cache.contains_key(&key)
+                        && !self.failed_image_keys.contains(&key)
+                        && self.inflight_image_keys.insert(key.clone())
+                    {
+                        let url = att.url.clone();
+                        tasks.push(Task::perform(ipc::fetch_library_image(url), move |r| {
+                            Message::LibraryImageLoaded(key, r)
+                        }));
+                        preload_count += 1;
+                    }
+                }
+            }
+            for img in &msg.generated_images {
+                if preload_count < 24 && !img.url.is_empty() {
+                    let key = markdown_view::generated_image_cache_key(&img.url);
+                    if !self.library_image_cache.contains_key(&key)
+                        && !self.failed_image_keys.contains(&key)
+                        && self.inflight_image_keys.insert(key.clone())
+                    {
+                        let url = img.url.clone();
+                        tasks.push(Task::perform(ipc::fetch_library_image(url), move |r| {
+                            Message::LibraryImageLoaded(key, r)
+                        }));
+                        preload_count += 1;
+                    }
+                }
+            }
+            if preload_count >= 24 {
+                break;
+            }
+        }
+        if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        }
+    }
+
+    fn preload_visible_images(&mut self) -> Task<Message> {
+        match self.active_section {
+            ActiveSection::Library | ActiveSection::Images => self.preload_library_images(),
+            ActiveSection::Chat => self.preload_active_chat_images(),
+            _ => Task::none(),
+        }
+    }
+
+    fn quit_app(&mut self) -> Task<Message> {
+        self.cancel_active_stream();
+        if let Some(rec) = self.voice_recorder.take() {
+            drop(rec);
+        }
+        iced::exit()
     }
 
     fn set_palette(&mut self, next: AppTheme) {
@@ -762,6 +914,9 @@ impl App {
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             system::theme_changes().map(Message::SystemThemeChanged),
+            window::close_requests().map(Message::WindowCloseRequested),
+            window::close_events().map(Message::WindowClosed),
+            Subscription::run(tray::run_tray_service).map(Message::TrayEventReceived),
             event::listen_with(|ev, _status, _id| {
                 let interested = match &ev {
                     Event::Window(
@@ -776,7 +931,7 @@ impl App {
                             matches!(
                                 key,
                                 keyboard::Key::Character(ch)
-                                    if matches!(ch.as_str(), "n" | "N" | "b" | "B" | "k" | "K" | ",")
+                                    if matches!(ch.as_str(), "n" | "N" | "b" | "B" | "k" | "K" | "q" | "Q" | ",")
                             )
                         } else {
                             matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
@@ -798,8 +953,9 @@ impl App {
             subs.push(time::every(Duration::from_secs(1)).map(|_| Message::Tick));
         }
 
-        // System 테마 모드에서는 백그라운드 스트림이 실제 Omarchy 테마 변경 시점에만 메시지를 보낸다.
-        if self.theme_mode == ThemeMode::System {
+        // 창이 표시 중이고 System 테마 모드일 때만 3초 간격 Omarchy 테마 변경을 감시한다.
+        // 트레이 숨김 중에는 주기 깨어남을 0으로 유지하고, 창을 다시 열 때 즉시 1회 동기화한다.
+        if self.main_window.is_some() && self.theme_mode == ThemeMode::System {
             subs.push(Subscription::run(watch_omarchy_theme).map(Message::OmarchyThemeChanged));
         }
 
@@ -896,7 +1052,95 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.update_inner(message);
+        self.sync_tray_state();
+        task
+    }
+
+    fn update_inner(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::WindowOpened(id) => {
+                self.main_window = Some(id);
+                self.sync_system_theme_if_needed();
+                let mut tasks = Vec::new();
+                if self.theme_mode == ThemeMode::System {
+                    tasks.push(system::theme().map(Message::SystemThemeChanged));
+                }
+                tasks.push(self.preload_visible_images());
+                if !self.messages.is_empty() {
+                    tasks.push(Self::scroll_to_bottom());
+                }
+                Task::batch(tasks)
+            }
+            Message::WindowCloseRequested(id) => {
+                if self.close_to_tray && self.tray_available {
+                    if self.main_window == Some(id) {
+                        self.main_window = None;
+                        self.release_hidden_window_caches();
+                    }
+                    window::close(id)
+                } else {
+                    self.quit_app()
+                }
+            }
+            Message::WindowClosed(id) => {
+                if self.main_window == Some(id) {
+                    self.main_window = None;
+                    self.release_hidden_window_caches();
+                }
+                Task::none()
+            }
+            Message::TrayEventReceived(ev) => match ev {
+                tray::TrayEvent::Ready { available, updater } => {
+                    self.tray_available = available;
+                    self.tray_tx = updater;
+                    Task::none()
+                }
+                tray::TrayEvent::WatcherAvailabilityChanged(available) => {
+                    self.tray_available = available;
+                    Task::none()
+                }
+                tray::TrayEvent::Action(action) => match action {
+                    tray::TrayAction::ShowWindow => self.open_or_focus_window(),
+                    tray::TrayAction::ToggleWindow => {
+                        if self.main_window.is_some() {
+                            self.hide_window_to_tray()
+                        } else {
+                            self.open_or_focus_window()
+                        }
+                    }
+                    tray::TrayAction::NewChat => {
+                        let open = self.open_or_focus_window();
+                        let chat = self.update_inner(Message::NewChat);
+                        Task::batch([open, chat])
+                    }
+                    tray::TrayAction::ToggleRemote => {
+                        self.update_inner(Message::ToggleRemoteEnabled)
+                    }
+                    tray::TrayAction::OpenSettings => {
+                        let open = self.open_or_focus_window();
+                        let settings = self.update_inner(Message::OpenSettingsModal);
+                        Task::batch([open, settings])
+                    }
+                    tray::TrayAction::Quit => self.quit_app(),
+                },
+            },
+            Message::ToggleCloseToTray => {
+                self.close_to_tray = !self.close_to_tray;
+                let enabled = self.close_to_tray;
+                self.show_toast(t(
+                    self.locale,
+                    if enabled {
+                        "창 닫기 시 트레이 최소화를 켰습니다"
+                    } else {
+                        "창 닫기 시 앱을 바로 종료합니다"
+                    },
+                ));
+                Task::perform(
+                    ipc::save_preferences(serde_json::json!({ "close_to_tray": enabled })),
+                    Message::PreferencesSaved,
+                )
+            }
             Message::Tick => {
                 if self.voice_recorder.is_some() {
                     self.recording_seconds = self.recording_seconds.saturating_add(1);
@@ -958,10 +1202,11 @@ impl App {
                     if modifiers.control() {
                         if let keyboard::Key::Character(ref ch) = key {
                             match ch.as_str() {
-                                "n" | "N" => return self.update(Message::NewChat),
-                                "b" | "B" => return self.update(Message::ToggleSidebar),
-                                "k" | "K" => return self.update(Message::OpenSearchModal),
-                                "," => return self.update(Message::OpenSettingsModal),
+                                "n" | "N" => return self.update_inner(Message::NewChat),
+                                "b" | "B" => return self.update_inner(Message::ToggleSidebar),
+                                "k" | "K" => return self.update_inner(Message::OpenSearchModal),
+                                "q" | "Q" => return self.quit_app(),
+                                "," => return self.update_inner(Message::OpenSettingsModal),
                                 _ => {}
                             }
                         }
@@ -1253,10 +1498,12 @@ impl App {
             Message::SchedulesLoaded(Err(_)) => Task::none(),
             Message::LibraryLoaded(Ok(res)) => {
                 self.library_items = res.items;
-                if matches!(
-                    self.active_section,
-                    ActiveSection::Library | ActiveSection::Images
-                ) {
+                if self.main_window.is_some()
+                    && matches!(
+                        self.active_section,
+                        ActiveSection::Library | ActiveSection::Images
+                    )
+                {
                     self.preload_library_images()
                 } else {
                     Task::none()
@@ -1265,6 +1512,9 @@ impl App {
             Message::LibraryLoaded(Err(_)) => Task::none(),
             Message::LibraryImageLoaded(id, Ok(bytes)) => {
                 self.inflight_image_keys.remove(&id);
+                if self.main_window.is_none() {
+                    return Task::none();
+                }
                 if bytes.is_empty() {
                     self.failed_image_keys.insert(id);
                 } else {
@@ -1306,6 +1556,7 @@ impl App {
                 self.locale = next_lang.resolve();
                 self.personal_intelligence = prefs.personal_intelligence;
                 self.custom_instructions_draft = prefs.custom_instructions;
+                self.close_to_tray = prefs.close_to_tray;
                 Task::none()
             }
             Message::PreferencesLoaded(Err(_)) => Task::none(),
@@ -3241,7 +3492,7 @@ impl App {
         }
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self, _window: window::Id) -> Element<'_, Message> {
         let mut root_row = row![].width(Fill).height(Fill);
         if self.sidebar_open {
             let border_subtle = self.palette.border_subtle;
@@ -5661,6 +5912,35 @@ impl App {
             }
         });
 
+        let tray_on = self.close_to_tray;
+        let tray_btn = button(
+            text(if tray_on { t(loc, "켜짐") } else { t(loc, "꺼짐") })
+                .size(12)
+                .font(font_medium())
+                .color(if tray_on { accent } else { text_secondary }),
+        )
+        .on_press(Message::ToggleCloseToTray)
+        .padding([4, 12])
+        .style(move |_, status| {
+            let hovered = matches!(status, button::Status::Hovered);
+            button::Style {
+                background: Some(Background::Color(if tray_on {
+                    accent_soft
+                } else if hovered {
+                    bg_hover
+                } else {
+                    bg_composer
+                })),
+                text_color: if tray_on { accent } else { text_secondary },
+                border: Border {
+                    radius: 10.0.into(),
+                    width: 1.0,
+                    color: if tray_on { accent } else { border_subtle },
+                },
+                ..button::Style::default()
+            }
+        });
+
         let prefs_card = container(
             column![
                 row![
@@ -5689,6 +5969,24 @@ impl App {
                         lang_seg(LanguagePref::En),
                     ]
                     .spacing(5),
+                ]
+                .align_y(Alignment::Center),
+                row![
+                    column![
+                        text(t(loc, "창 닫기 시 트레이로 최소화"))
+                            .size(13)
+                            .font(font_medium())
+                            .color(text_strong),
+                        text(t(
+                            loc,
+                            "창을 닫아도 시스템 트레이에서 백그라운드로 유지합니다.",
+                        ))
+                            .size(11.5)
+                            .color(text_muted),
+                    ]
+                    .spacing(2),
+                    space::horizontal(),
+                    tray_btn,
                 ]
                 .align_y(Alignment::Center),
                 row![

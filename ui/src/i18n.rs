@@ -507,6 +507,12 @@ pub fn t(locale: Locale, ko: &str) -> &str {
         "이미지 썸네일 로드 실패" => "Failed to load thumbnail",
         "이미지 로드 실패" => "Failed to load image",
 
+        // 시스템 트레이
+        "창 닫기 시 트레이로 최소화" => "Minimize to system tray on close",
+        "창을 닫아도 시스템 트레이에서 백그라운드로 유지합니다." => "Keep running in the system tray when closing the window.",
+        "창 닫기 시 트레이 최소화를 켰습니다" => "Close to system tray enabled",
+        "창 닫기 시 앱을 바로 종료합니다" => "Closing window will quit the app",
+
         _ => ko,
     }
 }
