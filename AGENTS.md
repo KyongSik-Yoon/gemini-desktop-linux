@@ -1,4 +1,4 @@
-# gemini-remote-linux 프로젝트 하네스
+# gemini-desktop-linux 프로젝트 하네스
 
 이 저장소는 Go 백엔드 데몬(`gemini-remote`, `cmd/`·`internal/`)과 Rust/iced 데스크톱 앱(`gemini-ui`, `ui/`)으로 구성된다. 새 기능을 추가하거나 리팩터링할 때 아래 성능·안정성 불변조건을 처음부터 기본 전제로 적용한다.
 
