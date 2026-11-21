@@ -137,9 +137,11 @@ impl App {
                     let kind_label = match it.kind.as_str() {
                         "document" => t(loc, "Canvas 문서"),
                         "image" => pick(loc, "이미지", "Image"),
+                        "video" => pick(loc, "동영상", "Video"),
                         "audio" => t(loc, "오디오"),
                         _ => t(loc, "파일"),
                     };
+                    let display_title = t(loc, &it.title);
                     let mut card_body = column![
                         row![
                             if it.kind == "document" {
@@ -149,7 +151,7 @@ impl App {
                             } else {
                                 Icon::AttachFile.view(15.0, accent)
                             },
-                            text(truncate_single_line(&it.title, 28))
+                            text(truncate_single_line(display_title, 28))
                                 .size(14)
                                 .font(font_semibold())
                                 .color(text_strong),
@@ -642,9 +644,10 @@ impl App {
                             })
                             .into()
                     };
+                    let display_title = t(loc, &it.title);
                     let mut c = column![
                         preview_el,
-                        text(truncate_single_line(&it.title, 26))
+                        text(truncate_single_line(display_title, 26))
                             .size(13)
                             .font(font_medium())
                             .color(text_strong),
@@ -1021,7 +1024,7 @@ impl App {
                         column![
                             row![
                                 Icon::Clock.view(16.0, accent),
-                                text(&s.title)
+                                text(t(loc, &s.title))
                                     .size(14.5)
                                     .font(font_semibold())
                                     .color(text_strong),
@@ -1671,7 +1674,7 @@ impl App {
         .width(Fill)
         .style(move |_| card_style(bg_composer, border_subtle));
 
-        self.wrap_section_page(column![header, grid, editor_card].spacing(18))
+        self.wrap_section_page(column![header, editor_card, grid].spacing(18))
     }
 
     /// Gems 허브 페이지 (`더보기 -> Gems`): 내 Gem + 공식 Gem 카드 그리드.

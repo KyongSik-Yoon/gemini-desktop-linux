@@ -946,6 +946,19 @@ pub async fn list_conversations(page_size: usize) -> Result<ListConversationsRes
     .await
 }
 
+pub async fn list_conversations_page(
+    page_size: usize,
+    page_token: String,
+) -> Result<ListConversationsResponse, String> {
+    let enc = url_encode_query(page_token.trim());
+    request_json(
+        "GET",
+        &format!("/v1/conversations?page_size={page_size}&page_token={enc}"),
+        None,
+    )
+    .await
+}
+
 pub async fn search_conversations(query: String) -> Result<SearchResponse, String> {
     let q = url_encode_query(query.trim());
     request_json("GET", &format!("/v1/conversations/search?q={q}"), None).await

@@ -129,10 +129,62 @@ func (c *Client) ListGeminiAppArtifacts(ctx context.Context, pageSize int32) ([]
 	merged := make([]proto.AppArtifact, 0, len(docs)+len(media))
 	merged = append(merged, docs...)
 	merged = append(merged, media...)
+	merged = dedupAppArtifacts(merged)
 	sort.Slice(merged, func(i, j int) bool {
 		return merged[i].CreatedAtUnix > merged[j].CreatedAtUnix
 	})
 	return merged, nil
+}
+
+// dedupAppArtifacts는 문서·미디어 아티팩트 병합 시 동일 아티팩트 중복을 제거한다.
+func dedupAppArtifacts(items []proto.AppArtifact) []proto.AppArtifact {
+	if len(items) <= 1 {
+		return items
+	}
+	indexByKey := make(map[string]int, len(items))
+	out := make([]proto.AppArtifact, 0, len(items))
+	for _, it := range items {
+		keys := make([]string, 0, 3)
+		if it.ID != "" && it.ResponseID != "" {
+			keys = append(keys, "id:"+it.ID)
+		}
+		if it.URL != "" {
+			keys = append(keys, "url:"+it.Kind+"|"+it.ConversationID+"|"+it.URL)
+		}
+		if it.ConversationID != "" {
+			keys = append(keys, fmt.Sprintf("meta:%s|%s|%s|%d", it.Kind, it.ConversationID, it.Title, it.CreatedAtUnix))
+		}
+		matchedIdx := -1
+		for _, k := range keys {
+			if idx, ok := indexByKey[k]; ok {
+				matchedIdx = idx
+				break
+			}
+		}
+		if matchedIdx >= 0 {
+			existing := out[matchedIdx]
+			if existing.ContentPreview == "" && it.ContentPreview != "" {
+				existing.ContentPreview = it.ContentPreview
+			}
+			if existing.URL == "" && it.URL != "" {
+				existing.URL = it.URL
+			}
+			if existing.CreatedAtUnix == 0 && it.CreatedAtUnix > 0 {
+				existing.CreatedAtUnix = it.CreatedAtUnix
+			}
+			out[matchedIdx] = existing
+			for _, k := range keys {
+				indexByKey[k] = matchedIdx
+			}
+			continue
+		}
+		idx := len(out)
+		out = append(out, it)
+		for _, k := range keys {
+			indexByKey[k] = idx
+		}
+	}
+	return out
 }
 
 // ListGeminiMediaArtifacts는 서버 라이브러리에서 생성 이미지(미디어) 아티팩트만 조회한다.
@@ -145,7 +197,11 @@ func (c *Client) ListGeminiMediaArtifacts(ctx context.Context, pageSize int32) (
 	if err != nil {
 		return nil, err
 	}
-	return proto.DecodeListGeminiAppArtifactsResponse(respBytes, true)
+	items, err := proto.DecodeListGeminiAppArtifactsResponse(respBytes, true)
+	if err != nil {
+		return nil, err
+	}
+	return dedupAppArtifacts(items), nil
 }
 
 // GetUsageInfo는 현재 계정의 사용량 한도 정보를 조회한다.

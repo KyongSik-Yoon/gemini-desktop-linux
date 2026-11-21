@@ -835,6 +835,30 @@ func gitToolDeclarations() []proto.FunctionDecl {
 			Description: "List branches in the repository.",
 			Parameters:  &proto.SchemaDef{Type: proto.TypeObject, Properties: repoProp},
 		},
+		{
+			Name:        "git_checkout",
+			Description: "Switch branches or restore working tree files.",
+			Parameters: &proto.SchemaDef{
+				Type:     proto.TypeObject,
+				Required: []string{"branch"},
+				Properties: map[string]*proto.SchemaDef{
+					"repo_path": {Type: proto.TypeString, Description: "Repository path"},
+					"branch":    {Type: proto.TypeString, Description: "Branch name to checkout"},
+				},
+			},
+		},
+		{
+			Name:        "git_commit",
+			Description: "Record staged changes to the repository with a commit message.",
+			Parameters: &proto.SchemaDef{
+				Type:     proto.TypeObject,
+				Required: []string{"message"},
+				Properties: map[string]*proto.SchemaDef{
+					"repo_path": {Type: proto.TypeString, Description: "Repository path"},
+					"message":   {Type: proto.TypeString, Description: "Commit message"},
+				},
+			},
+		},
 	}
 }
 

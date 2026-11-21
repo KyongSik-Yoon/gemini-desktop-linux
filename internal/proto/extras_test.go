@@ -178,3 +178,16 @@ func TestDecodeConversationTurnCleanTextAndStatus(t *testing.T) {
 		t.Fatalf("히스토리 도구 활동 파싱 실패: %+v", got.ToolActivities)
 	}
 }
+
+func TestCleanArtifactPreview(t *testing.T) {
+	raw := "```html\n<!DOCTYPE html><html><head><title>테스트 대시보드</title><style>body{color:red}</style></head><body><h1>안녕하세요</h1><p>미리보기 본문</p></body></html>\n```"
+	got := cleanArtifactPreview(raw)
+	if got != "HTML · 테스트 대시보드" {
+		t.Fatalf("HTML title 정제 불일치: %q", got)
+	}
+	noTitle := "```html\n<div><h1>안녕하세요</h1><p>미리보기 본문</p></div>\n```"
+	got2 := cleanArtifactPreview(noTitle)
+	if got2 == "" || got2[0] == '`' || got2[0] == '<' {
+		t.Fatalf("HTML 태그 정제 실패: %q", got2)
+	}
+}

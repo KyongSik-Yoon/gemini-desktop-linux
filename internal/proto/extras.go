@@ -430,7 +430,7 @@ func DecodeListGeminiAppArtifactsResponse(data []byte, isMedia bool) ([]AppArtif
 						switch p.Num {
 						case 1:
 							if item.ContentPreview == "" {
-								s := strings.TrimSpace(string(p.Bytes))
+								s := cleanArtifactPreview(string(p.Bytes))
 								if len([]rune(s)) > 300 {
 									s = string([]rune(s)[:300]) + "…"
 								}
@@ -467,6 +467,79 @@ func DecodeListGeminiAppArtifactsResponse(data []byte, isMedia bool) ([]AppArtif
 		}
 	}
 	return out, nil
+}
+
+// cleanArtifactPreview는 Canvas 문서 미리보기에서 마크다운 코드펜스와 HTML 보일러플레이트를 정제한다.
+func cleanArtifactPreview(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "```") {
+		if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+			s = strings.TrimSpace(s[nl+1:])
+		} else {
+			// 단일 줄 코드펜스 헤더만 있을 경우 펜스 토큰 제거
+			s = strings.TrimSpace(strings.TrimPrefix(s, "```"))
+			if sp := strings.IndexByte(s, ' '); sp > 0 && sp < 16 {
+				head := strings.ToLower(s[:sp])
+				if head == "html" || head == "markdown" || head == "md" || head == "jsx" || head == "tsx" || head == "javascript" || head == "python" {
+					s = strings.TrimSpace(s[sp+1:])
+				}
+			}
+		}
+	}
+	s = strings.TrimSpace(strings.TrimSuffix(s, "```"))
+	lower := strings.ToLower(s)
+	isHTML := strings.HasPrefix(lower, "<!doctype html") ||
+		strings.HasPrefix(lower, "<html") ||
+		strings.HasPrefix(lower, "<div") ||
+		strings.HasPrefix(lower, "<section") ||
+		strings.HasPrefix(lower, "<main") ||
+		strings.HasPrefix(lower, "<article") ||
+		strings.HasPrefix(lower, "<body") ||
+		strings.HasPrefix(lower, "<header") ||
+		strings.HasPrefix(lower, "<h1") ||
+		strings.HasPrefix(lower, "<svg")
+	if isHTML {
+		// <title> 우선 추출, 없으면 <style>/<script>를 제외한 가시 텍스트 추출
+		if ti := strings.Index(lower, "<title>"); ti >= 0 {
+			rest := s[ti+len("<title>"):]
+			if end := strings.Index(strings.ToLower(rest), "</title>"); end >= 0 {
+				if title := strings.TrimSpace(rest[:end]); title != "" {
+					return "HTML · " + title
+				}
+			}
+		}
+		if bi := strings.Index(lower, "<body"); bi >= 0 {
+			if gt := strings.IndexByte(s[bi:], '>'); gt >= 0 {
+				s = s[bi+gt+1:]
+			}
+		}
+		s = stripHTMLTagsForPreview(s)
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+}
+
+func stripHTMLTagsForPreview(s string) string {
+	var out strings.Builder
+	inTag := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '<' {
+			inTag = true
+			out.WriteByte(' ')
+			continue
+		}
+		if ch == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			out.WriteByte(ch)
+		}
+	}
+	return out.String()
 }
 
 // UsageBucket은 계정 사용량 한도 단일 버킷(현재 세션/주간 한도)이다.

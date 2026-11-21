@@ -189,6 +189,14 @@ func (d *Daemon) handleWakeUpEvent(ctx context.Context, ev *proto.WakeUpEvent) {
 			return
 		}
 	}
+	if ev.ScheduledTaskName != "" {
+		fmt.Printf("[daemon] 예약 작업 완료 알림 수신: %s\n", ev.ScheduledTaskName)
+		notifyDesktop("Gemini 예약 작업", ev.ScheduledTaskName)
+		d.notifyStatusChanged("scheduled_task:" + ev.ScheduledTaskName)
+	}
+	if ev.IsClientSyncHint {
+		d.notifyStatusChanged("conversations_updated")
+	}
 	if ev.SessionRoutingKey == "" {
 		return
 	}
@@ -270,11 +278,35 @@ func (d *Daemon) runSessionLoop(parentCtx, sessionCtx context.Context, routingKe
 			}
 		}
 		if !resumePending {
+			if hadToolCall {
+				if err != nil {
+					notifyDesktop("Gemini 원격 작업 오류", "원격 도구 실행 중 오류가 발생했습니다.")
+				} else {
+					notifyDesktop("Gemini 원격 작업 완료", "원격 도구 실행이 완료되었습니다.")
+				}
+				d.notifyStatusChanged("conversations_updated")
+			}
 			return
 		}
 		fmt.Printf("[daemon] 보류된 후속 WakeUp 승계 실행 (routing_key=%s, seq=%d)\n", routingKey, entry.id)
 		currentToken = nextToken
 	}
+}
+
+// notifyDesktop은 notify-send가 설치된 리눅스 데스크톱 환경에 비동기 알림을 표시한다.
+func notifyDesktop(title, body string) {
+	if os.Getenv("GEMINI_DISABLE_NOTIFICATIONS") == "1" {
+		return
+	}
+	bin, err := exec.LookPath("notify-send")
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, bin, "--app-name=Gemini", title, body).Run()
+	}()
 }
 
 func (d *Daemon) tryStartSessionFromHint(parent context.Context, routingKey string) (context.Context, *sessionEntry, bool) {

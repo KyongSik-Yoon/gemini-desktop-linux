@@ -419,6 +419,9 @@ func decodeConversationTurn(data []byte) (ConversationTurn, error) {
 			}
 		}
 	}
+	if len(t.ToolActivities) > 1 {
+		t.ToolActivities = dedupToolActivities(t.ToolActivities)
+	}
 	return t, nil
 }
 
@@ -429,43 +432,80 @@ func decodeSavedUserAttachments(data []byte) []TurnAttachment {
 	}
 	var out []TurnAttachment
 	for _, f := range fields {
-		if f.Num != 4 || f.WireType != WireBytes {
+		if f.WireType != WireBytes {
 			continue
 		}
-		af, err := ParseFields(f.Bytes)
-		if err != nil {
-			continue
-		}
-		var att TurnAttachment
-		for _, a := range af {
-			switch a.Num {
-			case 3:
-				if a.WireType == WireBytes {
-					att.Name = strings.TrimSpace(string(a.Bytes))
-				}
-			case 4:
-				if a.WireType == WireBytes {
-					att.URL = strings.TrimSpace(string(a.Bytes))
-				}
-			case 12:
-				if a.WireType == WireBytes {
-					att.MimeType = strings.TrimSpace(string(a.Bytes))
-				}
-			case 16:
-				if a.WireType == WireBytes {
-					df, _ := ParseFields(a.Bytes)
-					for _, d := range df {
-						if d.Num == 1 && d.WireType == WireVarint {
-							att.Width = int32(d.Varint)
-						} else if d.Num == 2 && d.WireType == WireVarint {
-							att.Height = int32(d.Varint)
+		switch f.Num {
+		case 4: // Scotty 업로드 블롭 첨부
+			af, err := ParseFields(f.Bytes)
+			if err != nil {
+				continue
+			}
+			var att TurnAttachment
+			for _, a := range af {
+				switch a.Num {
+				case 3:
+					if a.WireType == WireBytes {
+						att.Name = strings.TrimSpace(string(a.Bytes))
+					}
+				case 4:
+					if a.WireType == WireBytes {
+						att.URL = strings.TrimSpace(string(a.Bytes))
+					}
+				case 12:
+					if a.WireType == WireBytes {
+						att.MimeType = strings.TrimSpace(string(a.Bytes))
+					}
+				case 16:
+					if a.WireType == WireBytes {
+						df, _ := ParseFields(a.Bytes)
+						for _, d := range df {
+							if d.Num == 1 && d.WireType == WireVarint {
+								att.Width = int32(d.Varint)
+							} else if d.Num == 2 && d.WireType == WireVarint {
+								att.Height = int32(d.Varint)
+							}
 						}
 					}
 				}
 			}
-		}
-		if att.Name != "" || att.URL != "" {
-			out = append(out, att)
+			if att.Name != "" || att.URL != "" {
+				out = append(out, att)
+			}
+		case 5: // Google Drive 파일 첨부 (f1=resource_id, f2=name, f3=url/mime)
+			df, err := ParseFields(f.Bytes)
+			if err != nil {
+				continue
+			}
+			var att TurnAttachment
+			var resourceID string
+			for _, d := range df {
+				if d.WireType != WireBytes {
+					continue
+				}
+				switch d.Num {
+				case 1:
+					resourceID = strings.TrimSpace(string(d.Bytes))
+				case 2:
+					att.Name = strings.TrimSpace(string(d.Bytes))
+				case 3:
+					v := strings.TrimSpace(string(d.Bytes))
+					if strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://") {
+						att.URL = v
+					} else if att.MimeType == "" {
+						att.MimeType = v
+					}
+				}
+			}
+			if att.Name == "" && resourceID != "" {
+				att.Name = "Drive: " + resourceID
+			}
+			if att.URL == "" && resourceID != "" {
+				att.URL = "https://drive.google.com/file/d/" + resourceID + "/view"
+			}
+			if att.Name != "" || att.URL != "" {
+				out = append(out, att)
+			}
 		}
 	}
 	return out
@@ -665,13 +705,14 @@ func decodeRequestIdentifiers(data []byte) (convID, parentReqID, parentRespID st
 	return convID, parentReqID, parentRespID
 }
 
-// ChatAttachment는 사용자 질문에 첨부할 Scotty 업로드 블롭 정보다.
+// ChatAttachment는 사용자 질문에 첨부할 Scotty 업로드 블롭 또는 Google Drive 파일 정보다.
 type ChatAttachment struct {
-	BlobID     string `json:"blob_id"`
-	FileType   int32  `json:"file_type"`
-	MimeType   string `json:"mime_type"`
-	FileSource int32  `json:"file_source"`
-	Name       string `json:"name"`
+	BlobID          string `json:"blob_id,omitempty"`
+	FileType        int32  `json:"file_type,omitempty"`
+	MimeType        string `json:"mime_type,omitempty"`
+	FileSource      int32  `json:"file_source,omitempty"`
+	Name            string `json:"name,omitempty"`
+	DriveResourceID string `json:"drive_resource_id,omitempty"`
 }
 
 // ChatQueryParams는 ProcessQuery 스트리밍 질문 전송 파라미터다.
@@ -710,6 +751,15 @@ func EncodeProcessQueryFrames(metadata []byte, p ChatQueryParams) (frame1, frame
 	uq := NewBuilder()
 	uq.AppendString(1, p.Text)
 	for _, att := range p.Attachments {
+		if att.DriveResourceID != "" {
+			drv := NewBuilder()
+			drv.AppendString(1, att.DriveResourceID)
+			uqa := NewBuilder()
+			uqa.AppendString(2, att.Name)
+			uqa.AppendMessage(5, drv.Bytes()) // DriveFile
+			uq.AppendMessage(3, uqa.Bytes())
+			continue
+		}
 		if att.BlobID == "" {
 			continue
 		}
@@ -954,6 +1004,33 @@ func decodeStatusUpdateResponse(data []byte) (string, []RemoteToolActivity) {
 	return statusText, activities
 }
 
+func cleanToolStatusText(raw, toolName string) string {
+	s := strings.ReplaceAll(raw, "{tool_logo_placeholder}", "")
+	if toolName != "" {
+		s = strings.ReplaceAll(s, "{tool_name_placeholder}", toolName)
+	} else {
+		s = strings.ReplaceAll(s, "{tool_name_placeholder}", "")
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+}
+
+func dedupToolActivities(in []RemoteToolActivity) []RemoteToolActivity {
+	if len(in) <= 1 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]RemoteToolActivity, 0, len(in))
+	for _, a := range in {
+		key := a.ID + "\x00" + a.Name + "\x00" + a.Action + "\x00" + a.Summary + "\x00" + a.Explanation
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, a)
+	}
+	return out
+}
+
 func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteToolActivity) {
 	fields, err := ParseFields(data)
 	if err != nil {
@@ -966,7 +1043,7 @@ func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteTool
 		switch f.Num {
 		case 1: // text
 			if f.WireType == WireBytes && len(f.Bytes) > 0 {
-				statusText = string(f.Bytes)
+				statusText = cleanToolStatusText(string(f.Bytes), "")
 			}
 		case 2: // 일반 대화 도구 상태 (예: Google Search 등)
 			if f.WireType != WireBytes {
@@ -989,7 +1066,7 @@ func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteTool
 							}
 							switch mf.Num {
 							case 3:
-								act.Name = string(mf.Bytes)
+								act.Name = strings.TrimSpace(string(mf.Bytes))
 							case 6:
 								act.Summary = string(mf.Bytes)
 							}
@@ -1001,6 +1078,7 @@ func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteTool
 				if act.Name == "" {
 					act.Name = "도구"
 				}
+				act.Summary = cleanToolStatusText(act.Summary, act.Name)
 				activities = append(activities, act)
 				if statusText == "" && act.Summary != "" {
 					statusText = act.Summary
@@ -1031,7 +1109,7 @@ func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteTool
 						case 3:
 							act.Action = string(tf.Bytes)
 						case 5:
-							act.Name = string(tf.Bytes)
+							act.Name = strings.TrimSpace(string(tf.Bytes))
 						case 9:
 							if act.ID == "" {
 								act.ID = string(tf.Bytes)
@@ -1041,11 +1119,13 @@ func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteTool
 						}
 					}
 					if act.Name != "" || act.Summary != "" || act.Action != "" {
+						act.Summary = cleanToolStatusText(act.Summary, act.Name)
+						act.Explanation = cleanToolStatusText(act.Explanation, act.Name)
 						activities = append(activities, act)
 					}
 				case 4: // model_thought_summary
 					if statusText == "" && rf.WireType == WireBytes && len(rf.Bytes) > 0 {
-						statusText = string(rf.Bytes)
+						statusText = cleanToolStatusText(string(rf.Bytes), "")
 					}
 				case 9: // goal_title (예약 작업/태스크 제목)
 					if rf.WireType == WireBytes && len(rf.Bytes) > 0 {
@@ -1059,13 +1139,16 @@ func decodeStatusUpdateResponseDetail(data []byte) (string, string, []RemoteTool
 					}
 				case 10: // summary
 					if statusText == "" && rf.WireType == WireBytes && len(rf.Bytes) > 0 {
-						statusText = string(rf.Bytes)
+						statusText = cleanToolStatusText(string(rf.Bytes), "")
 					}
 				}
 			}
 		}
 	}
-	return statusText, goalTitle, activities
+	if len(activities) > 0 && strings.Contains(statusText, "{tool_") {
+		statusText = cleanToolStatusText(statusText, activities[0].Name)
+	}
+	return statusText, goalTitle, dedupToolActivities(activities)
 }
 
 // EncodeAbortGenerationRequest는 진행 중인 생성을 중단하는 요청을 인코딩한다.

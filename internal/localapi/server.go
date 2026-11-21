@@ -236,7 +236,16 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 			pageSize = int32(n)
 		}
 	}
-	res, err := s.robinCli.ListAllConversations(r.Context(), pageSize)
+	pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
+	var (
+		res *proto.ListConversationsResult
+		err error
+	)
+	if pageToken != "" {
+		res, err = s.robinCli.ListConversationsWithFilter(r.Context(), pageSize, pageToken, proto.ListConversationsFilter{IncludeProjects: true})
+	} else {
+		res, err = s.robinCli.ListAllConversations(r.Context(), pageSize)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

@@ -500,6 +500,12 @@ pub fn t(locale: Locale, ko: &str) -> &str {
         "브라우저에서 Canvas HTML을 열었습니다" => "Opened Canvas HTML in browser",
         "Canvas HTML 임시 파일 생성에 실패했습니다" => "Failed to create temporary Canvas HTML file",
         "첨부 파일" => "Attachment",
+        "제목 없는 노트북" => "Untitled notebook",
+        "서버 예약" => "Cloud schedule",
+        "이전 대화 더 불러오기" => "Load older chats",
+        "불러오는 중..." => "Loading...",
+        "이미지 썸네일 로드 실패" => "Failed to load thumbnail",
+        "이미지 로드 실패" => "Failed to load image",
 
         _ => ko,
     }

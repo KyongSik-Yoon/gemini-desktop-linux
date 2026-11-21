@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/sam/gemini-remote-linux/internal/proto"
 )
 
 func TestIsAllowedGoogleImageHost(t *testing.T) {
@@ -77,5 +79,20 @@ func TestFetchAvatarBytesRejectsUnsafeURLs(t *testing.T) {
 		if _, _, err := cli.FetchAvatarBytes(context.Background(), bad); err == nil {
 			t.Fatalf("비허용 아바타 URL이 통과됨: %q", bad)
 		}
+	}
+}
+
+func TestDedupAppArtifacts(t *testing.T) {
+	in := []proto.AppArtifact{
+		{ID: "a1", ResponseID: "rc1", Kind: "document", ConversationID: "c1", Title: "대시보드", CreatedAtUnix: 100},
+		{ID: "a1", ResponseID: "rc1", Kind: "document", ConversationID: "c1", Title: "대시보드", CreatedAtUnix: 100},
+		{ID: "a2", ResponseID: "rc2", Kind: "document", ConversationID: "c1", Title: "대시보드", CreatedAtUnix: 100},
+		{ID: "i1", Kind: "image", ConversationID: "c2", URL: "https://lh3.googleusercontent.com/x", Title: "img"},
+		{ID: "i2", Kind: "image", ConversationID: "c2", URL: "https://lh3.googleusercontent.com/x", Title: "img"},
+		{ID: "d2", ResponseID: "rc3", Kind: "document", ConversationID: "c3", Title: "다른 문서", CreatedAtUnix: 200},
+	}
+	got := dedupAppArtifacts(in)
+	if len(got) != 3 {
+		t.Fatalf("아티팩트 중복 제거 실패: 예상 3개, 실제 %d개 (%+v)", len(got), got)
 	}
 }

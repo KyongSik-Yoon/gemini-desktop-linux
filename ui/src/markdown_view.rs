@@ -894,7 +894,15 @@ fn is_parenthesized_citation_span(
     spans: &[iced::widget::text::Span<'static, markdown::Uri>],
     idx: usize,
 ) -> bool {
-    if spans.get(idx).and_then(|s| s.link.as_ref()).is_none() {
+    let Some(span) = spans.get(idx) else {
+        return false;
+    };
+    if span.link.is_none() {
+        return false;
+    }
+    // 괄호 안에 전체 URL을 그대로 표기한 링크(`(https://...)`)는 출처 배지가 아닌 일반 링크로 유지한다.
+    let trimmed = span.text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         return false;
     }
     // 앞쪽 스팬들에서 닫는 괄호 없이 여는 `(`를 만나는지 확인
@@ -1173,6 +1181,9 @@ impl<'p> GeminiMarkdownViewer<'p> {
             {
                 spans[i].color = Some(citation_color);
                 spans[i].size = Some(citation_size);
+            } else if spans[i].link.is_some() {
+                // 원앱과 동일하게 일반 하이퍼링크는 파란색+밑줄로 명확히 구분한다.
+                spans[i].underline = true;
             } else if !is_heading
                 && spans[i].link.is_none()
                 && spans[i].color.is_none()
@@ -2734,5 +2745,24 @@ mod tests {
         assert!(code.contains("let v_1 = 1;"));
         assert!(code.contains("let v_120 = 120;"));
         assert_eq!(code.lines().count(), 120);
+    }
+
+    #[test]
+    fn 괄호_안_url_링크는_인용으로_축소하지_않고_일반_링크로_유지() {
+        use iced::widget::text::Span;
+        let spans = vec![
+            Span::new("영상 보기 ("),
+            Span::new("https://www.youtube.com/watch?v=23egfamDaWA")
+                .link("https://www.youtube.com/watch?v=23egfamDaWA".to_string()),
+            Span::new(")"),
+        ];
+        assert!(!is_parenthesized_citation_span(&spans, 1));
+
+        let cite_spans = vec![
+            Span::new("요약 ("),
+            Span::new("와우테일").link("https://wowtale.net".to_string()),
+            Span::new(")"),
+        ];
+        assert!(is_parenthesized_citation_span(&cite_spans, 1));
     }
 }

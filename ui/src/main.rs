@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 use theme::{AppTheme, ThemeMode, font_medium, font_regular, font_semibold};
 
 const CHAT_SCROLL_ID: &str = "chat_scroll";
+const SEARCH_INPUT_ID: &str = "search_modal_input";
 pub(crate) const WELCOME_MAX_WIDTH: f32 = 660.0;
 pub(crate) const CONTENT_MAX_WIDTH: f32 = 760.0;
 
@@ -317,12 +318,16 @@ pub(crate) struct App {
 
     // 대화 상태
     pub(crate) conversations: Vec<ConversationSummary>,
+    conversations_next_page_token: Option<String>,
+    loading_more_conversations: bool,
     active_conv_id: Option<String>,
+    active_conv_is_agent: bool,
     active_project_id: Option<String>,
     active_title: String,
     active_model: String,
     parent_request_id: String,
     parent_response_id: String,
+    pending_scroll_request_id: Option<String>,
     messages: Vec<ChatMessage>,
     message_feedback: HashMap<usize, bool>,
 
@@ -377,6 +382,8 @@ pub(crate) enum Message {
     RemoteStatusLoaded(Result<RemoteStatusSnapshot, String>),
     RemoteEventReceived(RemoteEvent),
     ConversationsLoaded(Result<ListConversationsResponse, String>),
+    LoadMoreConversations,
+    MoreConversationsLoaded(Result<ListConversationsResponse, String>),
     NotebooksLoaded(Result<NotebooksResponse, String>),
     SchedulesLoaded(Result<SchedulesResponse, String>),
     LibraryLoaded(Result<LibraryResponse, String>),
@@ -442,6 +449,7 @@ pub(crate) enum Message {
 
     // 대화 선택 · 관리 · 공유 · 읽지않음 · 피드백
     SelectConversation(String, String),
+    SelectSearchHit(String, String, String),
     TurnsLoaded(u64, String, Result<ListTurnsResponse, String>),
     NewChat,
     StartRename(String, String),
@@ -621,12 +629,16 @@ impl App {
             video_aspect: "16:9".into(),
             video_duration: "5초".into(),
             conversations: Vec::new(),
+            conversations_next_page_token: None,
+            loading_more_conversations: false,
             active_conv_id: None,
+            active_conv_is_agent: false,
             active_project_id: None,
             active_title: String::new(),
             active_model: String::new(),
             parent_request_id: String::new(),
             parent_response_id: String::new(),
+            pending_scroll_request_id: None,
             messages: Vec::new(),
             message_feedback: HashMap::new(),
             renaming_conv_id: None,
@@ -699,11 +711,13 @@ impl App {
             self.active_bot_id = None;
         }
         self.active_conv_id = None;
+        self.active_conv_is_agent = false;
         self.active_project_id = None;
         self.active_title.clear();
         self.active_model.clear();
         self.parent_request_id.clear();
         self.parent_response_id.clear();
+        self.pending_scroll_request_id = None;
         self.messages.clear();
         self.message_feedback.clear();
         self.renaming_conv_id = None;
@@ -762,7 +776,7 @@ impl App {
                             matches!(
                                 key,
                                 keyboard::Key::Character(ch)
-                                    if matches!(ch.as_str(), "n" | "N" | "b" | "B" | "k" | "K")
+                                    if matches!(ch.as_str(), "n" | "N" | "b" | "B" | "k" | "K" | ",")
                             )
                         } else {
                             matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
@@ -947,6 +961,7 @@ impl App {
                                 "n" | "N" => return self.update(Message::NewChat),
                                 "b" | "B" => return self.update(Message::ToggleSidebar),
                                 "k" | "K" => return self.update(Message::OpenSearchModal),
+                                "," => return self.update(Message::OpenSettingsModal),
                                 _ => {}
                             }
                         }
@@ -1078,6 +1093,29 @@ impl App {
                     Task::none()
                 }
                 RemoteEvent::Tool(tool_ev) => {
+                    if tool_ev.phase == "status_changed" {
+                        if tool_ev.tool_name == "conversations_updated" {
+                            return Task::perform(
+                                ipc::list_conversations(60),
+                                Message::ConversationsLoaded,
+                            );
+                        }
+                        if let Some(task_name) = tool_ev.tool_name.strip_prefix("scheduled_task:") {
+                            self.show_toast(if self.locale.is_en() {
+                                format!("Scheduled task finished: {task_name}")
+                            } else {
+                                format!("예약 작업 완료: {task_name}")
+                            });
+                            return Task::batch([
+                                Task::perform(
+                                    ipc::list_conversations(60),
+                                    Message::ConversationsLoaded,
+                                ),
+                                Task::perform(ipc::list_schedules(), Message::SchedulesLoaded),
+                            ]);
+                        }
+                        return Task::none();
+                    }
                     match tool_ev.phase.as_str() {
                         "started" | "start" => {
                             self.remote_status.current_tool = tool_ev.tool_name.clone();
@@ -1384,8 +1422,15 @@ impl App {
             Message::OpenSearchModal => {
                 self.search_modal_open = true;
                 self.model_menu_open = false;
+                self.thinking_submenu_open = false;
+                self.tools_menu_open = false;
+                self.device_menu_open = false;
+                self.more_menu_open = false;
+                self.filter_menu_open = false;
+                self.conv_menu_target = None;
+                self.conv_menu_notebook_sub = false;
                 self.settings_modal_open = false;
-                Task::none()
+                operation::focus(SEARCH_INPUT_ID)
             }
             Message::CloseSearchModal => {
                 self.search_modal_open = false;
@@ -1599,9 +1644,13 @@ impl App {
             }
             Message::ConversationsLoaded(Ok(res)) => {
                 self.conversations = res.conversations;
+                self.conversations_next_page_token =
+                    (!res.next_page_token.is_empty()).then_some(res.next_page_token);
+                self.loading_more_conversations = false;
                 Task::none()
             }
             Message::ConversationsLoaded(Err(e)) => {
+                self.loading_more_conversations = false;
                 self.error_banner = Some(if self.locale.is_en() {
                     format!("Failed to load conversations: {e}")
                 } else {
@@ -1609,10 +1658,53 @@ impl App {
                 });
                 Task::none()
             }
+            Message::LoadMoreConversations => {
+                if self.loading_more_conversations {
+                    return Task::none();
+                }
+                let Some(token) = self.conversations_next_page_token.clone() else {
+                    return Task::none();
+                };
+                self.loading_more_conversations = true;
+                Task::perform(
+                    ipc::list_conversations_page(60, token),
+                    Message::MoreConversationsLoaded,
+                )
+            }
+            Message::MoreConversationsLoaded(Ok(res)) => {
+                self.loading_more_conversations = false;
+                let existing: HashSet<String> = self
+                    .conversations
+                    .iter()
+                    .map(|c| c.conversation_id.clone())
+                    .collect();
+                for c in res.conversations {
+                    if !existing.contains(&c.conversation_id) {
+                        self.conversations.push(c);
+                    }
+                }
+                self.conversations_next_page_token =
+                    (!res.next_page_token.is_empty()).then_some(res.next_page_token);
+                Task::none()
+            }
+            Message::MoreConversationsLoaded(Err(e)) => {
+                self.loading_more_conversations = false;
+                self.error_banner = Some(if self.locale.is_en() {
+                    format!("Failed to load older chats: {e}")
+                } else {
+                    format!("이전 대화 추가 조회 실패: {e}")
+                });
+                Task::none()
+            }
             Message::NewChat => {
                 self.model_menu_open = false;
                 self.reset_chat_state(true);
                 Task::none()
+            }
+            Message::SelectSearchHit(conv_id, title, request_id) => {
+                let task = self.update(Message::SelectConversation(conv_id, title));
+                self.pending_scroll_request_id = (!request_id.is_empty()).then_some(request_id);
+                task
             }
             Message::SelectConversation(conv_id, title) => {
                 self.model_menu_open = false;
@@ -1634,11 +1726,10 @@ impl App {
                         is_agent = c.is_agent_chat;
                     }
                 }
-                self.composer_mode = if is_agent {
-                    ComposerMode::Task
-                } else {
-                    ComposerMode::Chat
-                };
+                // 원앱과 동일하게 기존 대화를 열 때 입력창에 강제 Task 칩을 띄우지 않고,
+                // 에이전트 스레드 여부만 내부 플래그로 유지한다.
+                self.active_conv_is_agent = is_agent;
+                self.composer_mode = ComposerMode::Chat;
 
                 let seq = self.conv_load_seq;
                 let id_for_cb = conv_id.clone();
@@ -1727,8 +1818,7 @@ impl App {
                         m.tool_activities = t.tool_activities.clone();
                         m.generated_images = t.generated_images.clone();
                         m.artifacts = t.artifacts.clone();
-                        m.is_scheduled_run =
-                            t.is_scheduled_run || !t.scheduled_title.is_empty();
+                        m.is_scheduled_run = t.is_scheduled_run;
                         m.scheduled_title = t.scheduled_title.clone();
                         m.aborted = t.aborted;
                         m.timestamp_unix = t.timestamp_unix;
@@ -1755,6 +1845,20 @@ impl App {
                     self.parent_request_id = last.request_id.clone();
                     self.parent_response_id = last.response_id.clone();
                     self.active_model = last.model_attribution.clone();
+                }
+                if let Some(target_req) = self.pending_scroll_request_id.take()
+                    && let Some(pos) = self
+                        .messages
+                        .iter()
+                        .position(|m| m.request_id == target_req)
+                    && !self.messages.is_empty()
+                {
+                    let denom = self.messages.len().saturating_sub(1).max(1) as f32;
+                    let ratio = (pos as f32 / denom).clamp(0.0, 1.0);
+                    tasks[0] = operation::snap_to(
+                        CHAT_SCROLL_ID,
+                        operation::RelativeOffset { x: 0.0, y: ratio },
+                    );
                 }
                 Task::batch(tasks)
             }
@@ -2188,6 +2292,9 @@ impl App {
                 Task::none()
             }
             Message::QuickCreateSchedule => {
+                if !self.sched_prompt_draft.trim().is_empty() {
+                    return self.update(Message::CreateSchedule);
+                }
                 self.sched_title_draft = t(self.locale, "매일 아침 브리핑").into();
                 self.sched_prompt_draft = t(
                     self.locale,
@@ -2999,7 +3106,7 @@ impl App {
             thinking_level,
             feature_mode,
             personal_intelligence: self.personal_intelligence,
-            agent_task: is_task,
+            agent_task: is_task || self.active_conv_is_agent,
             target_device_id,
             target_device_name,
             file_paths,
@@ -3339,11 +3446,11 @@ impl App {
         ]
         .spacing(1);
 
-        for nb in self.notebooks.iter().take(4) {
+        for nb in self.notebooks.iter().take(3) {
             let nb_id = nb.id.clone();
             let active = self.active_section == ActiveSection::Notebooks
                 && self.editing_notebook.id == nb.id;
-            let title = truncate_single_line(&nb.title, 24);
+            let title = truncate_single_line(t(loc, &nb.title), 24);
             nb_col = nb_col.push(
                 button(
                     row![
@@ -3442,7 +3549,7 @@ impl App {
         let mut conv_col = column![].spacing(1).padding(Padding {
             top: 0.0,
             right: 6.0,
-            bottom: 0.0,
+            bottom: 12.0,
             left: 0.0,
         });
         if filtered.is_empty() {
@@ -3457,6 +3564,35 @@ impl App {
         } else {
             for c in filtered {
                 conv_col = conv_col.push(self.view_conv_item(c));
+            }
+            if self.conversations_next_page_token.is_some() {
+                let load_lbl = if self.loading_more_conversations {
+                    t(loc, "불러오는 중...")
+                } else {
+                    t(loc, "이전 대화 더 불러오기")
+                };
+                conv_col = conv_col.push(
+                    container(
+                        button(
+                            text(load_lbl)
+                                .size(12)
+                                .font(font_medium())
+                                .color(text_secondary),
+                        )
+                        .on_press(Message::LoadMoreConversations)
+                        .width(Fill)
+                        .padding([7, 10])
+                        .style(move |_, status| {
+                            ghost_btn_style(status, bg_hover, text_secondary, 12.0)
+                        }),
+                    )
+                    .padding(Padding {
+                        top: 6.0,
+                        right: 0.0,
+                        bottom: 4.0,
+                        left: 0.0,
+                    }),
+                );
             }
         }
 
@@ -3566,7 +3702,7 @@ impl App {
                 ..container::Style::default()
             });
 
-        let profile_bar = container(
+        let profile_trigger = button(
             row![
                 avatar_el,
                 column![
@@ -3588,7 +3724,18 @@ impl App {
                     .align_y(Alignment::Center),
                 ]
                 .spacing(2),
-                space::horizontal(),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        )
+        .on_press(Message::OpenSettingsModal)
+        .padding([4, 6])
+        .width(Fill)
+        .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 12.0));
+
+        let profile_bar = container(
+            row![
+                profile_trigger,
                 button(container(Icon::Settings.view(18.5, text_primary)).center(Fill))
                     .on_press(Message::OpenSettingsModal)
                     .padding(0)
@@ -3596,7 +3743,7 @@ impl App {
                     .height(Length::Fixed(34.0))
                     .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 17.0)),
             ]
-            .spacing(10)
+            .spacing(6)
             .align_y(Alignment::Center),
         )
         .padding(Padding {
@@ -4840,6 +4987,7 @@ impl App {
             t(loc, "대화 제목이나 본문 키워드 입력 후 Enter..."),
             &self.search_query,
         )
+            .id(SEARCH_INPUT_ID)
             .on_input(Message::SearchQueryChanged)
             .on_submit(Message::SubmitServerSearch)
             .size(14.5)
@@ -4923,9 +5071,10 @@ impl App {
                 }
                 results = results.push(
                     button(col)
-                        .on_press(Message::SelectConversation(
+                        .on_press(Message::SelectSearchHit(
                             hit.conversation_id.clone(),
                             hit.title.clone(),
+                            hit.request_id.clone(),
                         ))
                         .width(Fill)
                         .padding([9, 12])

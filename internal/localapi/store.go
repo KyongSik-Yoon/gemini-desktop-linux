@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -473,13 +474,30 @@ func (st *WorkspaceStore) RunScheduler(ctx context.Context, robinCli *robin.Clie
 					}, nil)
 					if err != nil {
 						st.RecordScheduleRun(t.ID, "", "오류: "+err.Error(), "", false)
+						notifyDesktopLocal("Gemini 예약 오류", t.Title)
 						return
 					}
 					st.RecordScheduleRun(t.ID, final.ConversationID, "완료", final.Text, t.ScheduleType == "once")
+					notifyDesktopLocal("Gemini 예약 완료", t.Title)
 				}()
 			}
 		}
 	}
+}
+
+func notifyDesktopLocal(title, body string) {
+	if os.Getenv("GEMINI_DISABLE_NOTIFICATIONS") == "1" {
+		return
+	}
+	bin, err := exec.LookPath("notify-send")
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, bin, "--app-name=Gemini", title, body).Run()
+	}()
 }
 
 func (st *WorkspaceStore) collectDueSchedules(now time.Time) []ScheduledTask {

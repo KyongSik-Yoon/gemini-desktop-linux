@@ -217,3 +217,53 @@ func TestDecodeConversationTurnRichFields(t *testing.T) {
 		t.Fatalf("예약/중단 메타 디코딩 불일치: sched=%v title=%q aborted=%v", got.IsScheduledRun, got.ScheduledTitle, got.Aborted)
 	}
 }
+
+func TestCleanToolStatusTextAndDedup(t *testing.T) {
+	got := cleanToolStatusText("{tool_logo_placeholder} {tool_name_placeholder}에 연결 중", "YouTube")
+	if got != "YouTube에 연결 중" {
+		t.Fatalf("플레이스홀더 정제 실패: %q", got)
+	}
+
+	deduped := dedupToolActivities([]RemoteToolActivity{
+		{Name: "YouTube", Action: "YouTube에 연결 중"},
+		{Name: "YouTube", Action: "YouTube에 연결 중"},
+		{Name: "Google Search", Action: "검색 중"},
+	})
+	if len(deduped) != 2 {
+		t.Fatalf("중복 도구 활동 제거 실패: %+v", deduped)
+	}
+}
+
+func TestEncodeAndDecodeDriveAttachment(t *testing.T) {
+	f1, f2, f3 := EncodeProcessQueryFrames(nil, ChatQueryParams{
+		Text: "드라이브 파일 분석",
+		Attachments: []ChatAttachment{
+			{
+				Name:            "report.pdf",
+				MimeType:        "application/pdf",
+				DriveResourceID: "1abcDEF_drive_id",
+			},
+		},
+	})
+	if len(f1) == 0 || len(f2) == 0 || len(f3) == 0 {
+		t.Fatal("프레임 인코딩 실패")
+	}
+
+	// SavedUserAttachments (field 5: DriveFile) 디코딩 검증
+	df := NewBuilder()
+	df.AppendString(1, "1abcDEF_drive_id")
+	df.AppendString(2, "report.pdf")
+	df.AppendString(3, "application/pdf")
+
+	att := NewBuilder()
+	att.AppendMessage(5, df.Bytes())
+
+	decoded := decodeSavedUserAttachments(att.Bytes())
+	if len(decoded) != 1 {
+		t.Fatalf("드라이브 첨부 디코딩 개수 불일치: %+v", decoded)
+	}
+	wantURL := "https://drive.google.com/file/d/1abcDEF_drive_id/view"
+	if decoded[0].URL != wantURL || decoded[0].Name != "report.pdf" || decoded[0].MimeType != "application/pdf" {
+		t.Fatalf("드라이브 첨부 디코딩 값 불일치: %+v", decoded[0])
+	}
+}
