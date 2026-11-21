@@ -67,7 +67,8 @@ html[data-theme="day"] {
   --sheet-d: linear-gradient(180deg, #fafcff 0%, #edf3fb 100%);
   --sheet-border: rgba(255, 255, 255, 0.92);
   --sheet-shadow: 0 -20px 54px -26px rgba(30, 58, 138, 0.14);
-  --panel: rgba(255, 255, 255, 0.80);
+  --panel: rgba(255, 255, 255, 0.84);
+  --card-bg: rgba(255, 255, 255, 0.90);
   --panel-solid: #ffffff;
   --panel-inset: inset 0 1px 0 rgba(255, 255, 255, 0.88);
   --line: rgba(15, 23, 42, 0.10);
@@ -122,7 +123,8 @@ html[data-theme="night"] {
   --sheet-d: linear-gradient(180deg, #090e1c 0%, #0c1324 100%);
   --sheet-border: rgba(148, 163, 184, 0.18);
   --sheet-shadow: 0 -22px 58px -22px rgba(0, 0, 0, 0.62);
-  --panel: rgba(17, 25, 44, 0.78);
+  --panel: rgba(17, 25, 44, 0.84);
+  --card-bg: rgba(17, 25, 44, 0.90);
   --panel-solid: #131d34;
   --panel-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --line: rgba(148, 163, 184, 0.16);
@@ -165,7 +167,8 @@ html[data-theme="night"] {
 html { scroll-behavior: smooth; scroll-padding-top: 86px; overflow-x: clip; }
 body {
   margin: 0;
-  background: var(--sky) fixed;
+  background: var(--sky) no-repeat;
+  background-size: 100% 980px;
   background-color: var(--bg);
   color: var(--ink);
   font: 400 16px/1.7 var(--sans);
@@ -195,8 +198,8 @@ p { margin: 0; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--panel-inset), var(--shadow);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 /* Mouse-following glow cards */
@@ -243,6 +246,7 @@ html.js .rv.in { opacity: 1; transform: none; }
   background: linear-gradient(90deg, var(--g-blue), var(--g-cyan), var(--g-green), var(--g-amber));
   transform-origin: 0 50%;
   transform: scaleX(0);
+  will-change: transform;
   pointer-events: none;
 }
 .brand {
@@ -312,21 +316,30 @@ html.js .rv.in { opacity: 1; transform: none; }
 .btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Ambient Aurora & Particle Field */
-.hero-zone { position: relative; overflow: hidden; padding: clamp(28px, 4.5vw, 52px) 0 96px; }
+.hero-zone {
+  position: relative;
+  overflow: hidden;
+  contain: layout style paint;
+  padding: clamp(28px, 4.5vw, 52px) 0 96px;
+}
 #bg-field { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
 .orbs { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
 .orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(68px);
-  opacity: 0.9;
+  opacity: 0.92;
   will-change: transform;
-  animation: driftOrb 22s ease-in-out infinite alternate;
+  animation: driftOrb 24s ease-in-out infinite alternate;
 }
-.orb.o1 { width: 460px; height: 460px; top: -120px; left: -60px; background: var(--orb-1); }
-.orb.o2 { width: 420px; height: 420px; top: 40px; right: -80px; background: var(--orb-2); animation-duration: 28s; animation-direction: alternate-reverse; }
-.orb.o3 { width: 340px; height: 340px; bottom: 20px; left: 32%; background: var(--orb-3); animation-duration: 32s; }
-.orb.o4 { width: 280px; height: 280px; bottom: -40px; right: 20%; background: var(--orb-4); animation-duration: 25s; animation-direction: alternate-reverse; }
+.orb.o1 { width: 640px; height: 640px; top: -200px; left: -140px; background: radial-gradient(circle, var(--orb-1) 0%, transparent 70%); }
+.orb.o2 { width: 580px; height: 580px; top: -40px; right: -160px; background: radial-gradient(circle, var(--orb-2) 0%, transparent 70%); animation-duration: 30s; animation-direction: alternate-reverse; }
+.orb.o3 { width: 480px; height: 480px; bottom: -60px; left: 26%; background: radial-gradient(circle, var(--orb-3) 0%, transparent 70%); animation-duration: 34s; }
+.orb.o4 { width: 420px; height: 420px; bottom: -110px; right: 14%; background: radial-gradient(circle, var(--orb-4) 0%, transparent 70%); animation-duration: 27s; animation-direction: alternate-reverse; }
+.offscreen .orb,
+.offscreen .pulse-dot::after,
+.offscreen .grad-shimmer,
+.offscreen .wire-pkt,
+.offscreen .caret { animation-play-state: paused !important; }
 @keyframes driftOrb {
   0% { transform: translate3d(0, 0, 0) scale(1); }
   50% { transform: translate3d(34px, -22px, 0) scale(1.08); }
@@ -475,13 +488,10 @@ html[data-theme="night"] .grad-shimmer {
 .stage-card {
   border-radius: 22px;
   padding: 12px;
-  background: var(--panel);
+  background: var(--card-bg);
   border: 1px solid var(--line-strong);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--panel-inset), var(--shadow-lg);
   transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-  transform-style: preserve-3d;
 }
 .stage-top {
   display: flex;
@@ -561,8 +571,8 @@ html[data-theme="night"] .grad-shimmer {
   border-radius: 12px;
   background: var(--hud-bg);
   border: 1px solid var(--hud-border);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--hud-ink);
   font-family: var(--mono);
   font-size: 11.8px;
@@ -642,7 +652,8 @@ html[data-theme="night"] .grad-shimmer {
   padding: clamp(56px, 7vw, 96px) 0 clamp(76px, 8vw, 120px);
   border-top: 1px solid var(--sheet-border);
   box-shadow: var(--sheet-shadow);
-  transition: background 0.3s ease, border-color 0.3s ease;
+  contain: layout style;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 .sheet.last { padding-bottom: 0; }
 .sheet-a { background: var(--sheet-a); }
@@ -674,13 +685,11 @@ html[data-theme="night"] .grad-shimmer {
   align-items: stretch;
 }
 .card {
-  background: var(--panel);
+  background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 24px;
   box-shadow: var(--panel-inset), var(--shadow);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   min-width: 0;
   max-width: 100%;
   display: flex;
@@ -806,15 +815,13 @@ html[data-theme="night"] .grad-shimmer {
   margin-top: 22px;
 }
 .inv-card {
-  background: var(--panel);
+  background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 20px;
   min-width: 0;
   box-shadow: var(--panel-inset), var(--shadow);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, border-color 0.2s;
 }
 .inv-card:hover { transform: translateY(-3px); border-color: var(--accent); }
 .inv-badge {
@@ -969,14 +976,12 @@ kbd {
 
 /* Section 4: Animated Packet Architecture + Interactive 23-Tool Explorer */
 .arch-stage {
-  background: var(--panel);
+  background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 26px;
   margin-bottom: 22px;
   box-shadow: var(--panel-inset), var(--shadow);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
 }
 .arch-flow {
   display: grid;
@@ -1014,39 +1019,48 @@ kbd {
 .wire-line {
   position: relative;
   width: 100%;
+  height: 12px;
+  overflow: hidden;
+}
+.wire-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
   height: 3px;
+  margin-top: -1.5px;
   border-radius: 999px;
   background: var(--wire-track);
-  overflow: visible;
 }
 .wire-pkt {
   position: absolute;
   top: 50%;
   left: 0;
-  width: 24px;
+  width: 28%;
+  min-width: 20px;
   height: 8px;
   margin-top: -4px;
   border-radius: 999px;
   background: linear-gradient(90deg, transparent, #2563eb, #10b981);
-  box-shadow: 0 0 12px rgba(37, 99, 235, 0.55);
+  will-change: transform, opacity;
   animation: flyRight 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 .wire-pkt.rev {
   background: linear-gradient(270deg, transparent, #f59e0b, #0ea5e9);
-  box-shadow: 0 0 12px rgba(14, 165, 233, 0.55);
   animation: flyLeft 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite 1.2s;
 }
 @keyframes flyRight {
-  0% { left: 0%; opacity: 0; }
+  0% { transform: translate3d(-100%, 0, 0); opacity: 0; }
   15% { opacity: 1; }
   85% { opacity: 1; }
-  100% { left: calc(100% - 24px); opacity: 0; }
+  100% { transform: translate3d(360%, 0, 0); opacity: 0; }
 }
 @keyframes flyLeft {
-  0% { left: calc(100% - 24px); opacity: 0; }
+  0% { transform: translate3d(360%, 0, 0); opacity: 0; }
   15% { opacity: 1; }
   85% { opacity: 1; }
-  100% { left: 0%; opacity: 0; }
+  100% { transform: translate3d(-100%, 0, 0); opacity: 0; }
 }
 .wire-label {
   margin-top: 10px;
@@ -1066,14 +1080,12 @@ kbd {
 .tool-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .tool-tab {
   text-align: left;
-  background: var(--panel);
+  background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 16px;
   box-shadow: var(--panel-inset), 0 10px 26px -20px rgba(15, 23, 42, 0.18);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  transition: all 0.2s;
+  transition: transform 0.2s, border-color 0.2s, background-color 0.2s;
   min-width: 0;
 }
 .tool-tab:hover { border-color: var(--line-strong); transform: translateY(-2px); }
@@ -1403,7 +1415,7 @@ footer {
         </div>
 
         <div class="stage-viewport" id="hero-shot-open" title="Click to zoom">
-          <img id="hero-shot-img" src="./img/chat-dark.webp" width="1860" height="1230" alt="gemini-ui HiDPI screenshot">
+          <img id="hero-shot-img" src="./img/chat-dark.webp" width="1860" height="1230" decoding="async" fetchpriority="high" alt="gemini-ui HiDPI screenshot">
           <div class="stage-glare"></div>
           <div class="live-hud" id="live-hud">
             <div class="hud-left">
@@ -1630,8 +1642,8 @@ footer {
 
         <div class="curtain-wrap">
           <div class="curtain" id="theme-curtain" role="slider" tabindex="0" aria-label="Compare dark and light theme screenshots" aria-valuemin="5" aria-valuemax="95" aria-valuenow="50">
-            <img src="./img/chat-dark.webp" width="1860" height="1230" alt="gemini-ui dark theme chat">
-            <img class="layer-light" src="./img/chat-light.webp" width="1860" height="1230" alt="gemini-ui light theme chat">
+            <img src="./img/chat-dark.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui dark theme chat">
+            <img class="layer-light" src="./img/chat-light.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui light theme chat">
             <span class="curtain-tag left">Dark Theme</span>
             <span class="curtain-tag right">Light Theme</span>
             <div class="divider"></div>
@@ -1658,7 +1670,7 @@ footer {
           </div>
         </div>
         <div class="shot-frame" data-open-lb="2">
-          <img src="./img/schedules.webp" width="1860" height="1230" loading="lazy" alt="gemini-ui scheduled actions">
+          <img src="./img/schedules.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui scheduled actions">
         </div>
       </div>
 
@@ -1674,7 +1686,7 @@ footer {
           </ul>
         </div>
         <div class="shot-frame" data-open-lb="3">
-          <img src="./img/settings.webp" width="1860" height="1230" loading="lazy" alt="gemini-ui settings and remote pc control">
+          <img src="./img/settings.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui settings and remote pc control">
         </div>
       </div>
     </div>
@@ -1859,23 +1871,83 @@ footer {
     document.getElementById("hero-zone").classList.add("on");
   });
 
-  // Scroll progress bar + active nav + reveal observer
+  // Scroll progress bar + active nav (cached layout metrics + rAF throttle, zero forced layout during scroll)
   var progEl = document.getElementById("scroll-prog");
   var navLinks = Array.prototype.slice.call(document.querySelectorAll(".top nav a[href^='#']"));
   var navSections = navLinks.map(function (a) { return document.querySelector(a.getAttribute("href")); }).filter(Boolean);
-  function updateProg() {
-    var h = document.documentElement.scrollHeight - window.innerHeight;
-    var p = h > 0 ? Math.min(1, Math.max(0, window.scrollY / h)) : 0;
-    progEl.style.transform = "scaleX(" + p + ")";
-    var activeId = "";
-    var y = window.scrollY + 180;
-    for (var i = 0; i < navSections.length; i++) {
-      if (navSections[i].offsetTop <= y) activeId = "#" + navSections[i].id;
-    }
-    navLinks.forEach(function (a) { a.classList.toggle("active", a.getAttribute("href") === activeId); });
+  var docScrollMax = 0;
+  var sectionTops = [];
+  var lastActiveId = null;
+  var scrollRaf = 0;
+
+  function measureScrollMetrics() {
+    docScrollMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    sectionTops = navSections.map(function (sec) {
+      return { id: "#" + sec.id, top: sec.offsetTop };
+    });
+    paintScrollState();
   }
-  window.addEventListener("scroll", updateProg, { passive: true });
-  updateProg();
+
+  function paintScrollState() {
+    scrollRaf = 0;
+    var sy = window.scrollY;
+    var p = docScrollMax > 0 ? Math.min(1, Math.max(0, sy / docScrollMax)) : 0;
+    progEl.style.transform = "scaleX(" + p.toFixed(4) + ")";
+    var activeId = "";
+    var y = sy + 180;
+    for (var i = 0; i < sectionTops.length; i++) {
+      if (sectionTops[i].top <= y) activeId = sectionTops[i].id;
+    }
+    if (activeId !== lastActiveId) {
+      lastActiveId = activeId;
+      for (var j = 0; j < navLinks.length; j++) {
+        navLinks[j].classList.toggle("active", navLinks[j].getAttribute("href") === activeId);
+      }
+    }
+  }
+
+  function onScroll() {
+    if (!scrollRaf) scrollRaf = requestAnimationFrame(paintScrollState);
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", measureScrollMetrics, { passive: true });
+  window.addEventListener("load", measureScrollMetrics, { passive: true });
+  measureScrollMetrics();
+
+  // Viewport visibility gating: pause offscreen canvas rAF loops and CSS animations
+  var heroZone = document.getElementById("hero-zone");
+  var remoteSec = document.getElementById("remote");
+  var heroVisible = true;
+  var heroResumeCallbacks = [];
+  function setHeroVisible(vis) {
+    if (heroVisible === vis) return;
+    heroVisible = vis;
+    if (heroZone) heroZone.classList.toggle("offscreen", !vis);
+    if (vis && !document.hidden) {
+      heroResumeCallbacks.forEach(function (fn) { fn(); });
+    }
+  }
+  if ("IntersectionObserver" in window) {
+    var visIo = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.target === heroZone) {
+          setHeroVisible(e.isIntersecting);
+        } else {
+          e.target.classList.toggle("offscreen", !e.isIntersecting);
+        }
+      });
+    }, { rootMargin: "120px 0px" });
+    if (heroZone) visIo.observe(heroZone);
+    if (remoteSec) {
+      remoteSec.classList.add("offscreen");
+      visIo.observe(remoteSec);
+    }
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && heroVisible) {
+      heroResumeCallbacks.forEach(function (fn) { fn(); });
+    }
+  });
 
   if ("IntersectionObserver" in window && !REDUCED) {
     var io = new IntersectionObserver(function (entries) {
@@ -1891,37 +1963,47 @@ footer {
     document.querySelectorAll(".rv").forEach(function (el) { el.classList.add("in"); });
   }
 
-  // Mouse-follow glow on cards
-  document.querySelectorAll(".glow").forEach(function (card) {
-    card.addEventListener("pointermove", function (e) {
-      var r = card.getBoundingClientRect();
-      card.style.setProperty("--mx", (e.clientX - r.left) + "px");
-      card.style.setProperty("--my", (e.clientY - r.top) + "px");
+  // Mouse-follow glow on cards (cache rect on pointerenter to avoid per-move layout reads)
+  if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
+    document.querySelectorAll(".glow").forEach(function (card) {
+      var rect = null;
+      card.addEventListener("pointerenter", function () { rect = card.getBoundingClientRect(); });
+      card.addEventListener("pointermove", function (e) {
+        if (!rect) rect = card.getBoundingClientRect();
+        card.style.setProperty("--mx", (e.clientX - rect.left) + "px");
+        card.style.setProperty("--my", (e.clientY - rect.top) + "px");
+      });
+      card.addEventListener("pointerleave", function () { rect = null; });
     });
-  });
+  }
 
-  // Subtle 3D tilt on Hero Stage card (desktop pointers only)
+  // Subtle 3D tilt on Hero Stage card (desktop pointers only, cached rect)
   var tiltCard = document.getElementById("tilt-card");
-  if (!REDUCED && window.matchMedia("(pointer: fine)").matches) {
+  if (!REDUCED && window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
+    var tiltRect = null;
+    tiltCard.addEventListener("pointerenter", function () { tiltRect = tiltCard.getBoundingClientRect(); });
     tiltCard.addEventListener("pointermove", function (e) {
-      var r = tiltCard.getBoundingClientRect();
-      var x = (e.clientX - r.left) / r.width - 0.5;
-      var y = (e.clientY - r.top) / r.height - 0.5;
+      if (!tiltRect) tiltRect = tiltCard.getBoundingClientRect();
+      var x = (e.clientX - tiltRect.left) / tiltRect.width - 0.5;
+      var y = (e.clientY - tiltRect.top) / tiltRect.height - 0.5;
       tiltCard.style.transform = "perspective(1100px) rotateX(" + (-y * 4.5).toFixed(2) + "deg) rotateY(" + (x * 5.5).toFixed(2) + "deg)";
     });
     tiltCard.addEventListener("pointerleave", function () {
+      tiltRect = null;
       tiltCard.style.transform = "";
     });
   }
 
-  // Ambient Hero Particle Field Canvas
+  // Ambient Hero Particle Field Canvas (30fps cap + auto-pause when offscreen)
   (function initParticles() {
     var canvas = document.getElementById("bg-field");
     var ctx = canvas.getContext("2d");
     if (!ctx) return;
-    var w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     var colors = ["#4285f4", "#34a853", "#fbbc04", "#38bdf8", "#ea4335"];
     var pts = [];
+    var rafId = 0;
+    var lastTs = 0;
     function resize() {
       var r = canvas.parentElement.getBoundingClientRect();
       w = r.width; h = r.height;
@@ -1929,21 +2011,20 @@ footer {
       canvas.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       pts = [];
-      var count = Math.min(34, Math.max(14, Math.floor(w / 42)));
+      var count = Math.min(28, Math.max(12, Math.floor(w / 52)));
       for (var i = 0; i < count; i++) {
         pts.push({
           x: Math.random() * w,
           y: Math.random() * h,
-          vx: (Math.random() - 0.5) * 0.35,
-          vy: (Math.random() - 0.5) * 0.35,
+          vx: (Math.random() - 0.5) * 0.55,
+          vy: (Math.random() - 0.5) * 0.55,
           r: 1.4 + Math.random() * 2.2,
           c: colors[i % colors.length]
         });
       }
+      renderFrame();
     }
-    resize();
-    window.addEventListener("resize", resize);
-    function draw() {
+    function renderFrame() {
       ctx.clearRect(0, 0, w, h);
       var dark = document.documentElement.dataset.theme === "night";
       ctx.globalAlpha = dark ? 0.55 : 0.34;
@@ -1973,9 +2054,25 @@ footer {
           }
         }
       }
-      if (!REDUCED) requestAnimationFrame(draw);
     }
-    draw();
+    function loop(ts) {
+      rafId = 0;
+      if (REDUCED || !heroVisible || document.hidden) return;
+      if (ts - lastTs >= 33) {
+        lastTs = ts;
+        renderFrame();
+      }
+      rafId = requestAnimationFrame(loop);
+    }
+    function start() {
+      if (!REDUCED && !rafId && heroVisible && !document.hidden) {
+        rafId = requestAnimationFrame(loop);
+      }
+    }
+    heroResumeCallbacks.push(start);
+    resize();
+    window.addEventListener("resize", resize, { passive: true });
+    start();
   })();
 
   // Screenshots & Lightbox
@@ -2043,6 +2140,7 @@ footer {
     if (!lb.hidden) renderLb();
     updateSim();
     applyHeroMode(simMode);
+    measureScrollMetrics();
   });
 
   // Live Oscilloscope + Hero Mode Simulation
@@ -2101,12 +2199,13 @@ footer {
     var cycle = ["idle", "stream", "remote"];
     var ci = 0;
     autoSimTimer = setInterval(function () {
+      if (!heroVisible || document.hidden) return;
       ci = (ci + 1) % cycle.length;
       applyHeroMode(cycle[ci]);
     }, 5200);
   }
 
-  // Oscilloscope Canvas drawing
+  // Oscilloscope Canvas drawing (30fps cap, cached gradients, auto-pause when offscreen)
   (function initScope() {
     var sc = document.getElementById("scope-canvas");
     var ctx = sc.getContext("2d");
@@ -2116,77 +2215,97 @@ footer {
     var nat = new Array(N).fill(0.04);
     var ele = new Array(N).fill(0.42);
     var tick = 0;
+    var cw = 240, ch = 64;
+    var eleGrad = null, natGrad = null;
+    var rafId = 0;
+    var lastTs = 0;
 
     function resize() {
       var r = sc.getBoundingClientRect();
-      sc.width = Math.max(240, Math.round(r.width * dpr));
-      sc.height = Math.round(64 * dpr);
+      cw = Math.max(240, Math.round(r.width));
+      ch = 64;
+      sc.width = Math.round(cw * dpr);
+      sc.height = Math.round(ch * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      eleGrad = ctx.createLinearGradient(0, 0, 0, ch);
+      eleGrad.addColorStop(0, "rgba(248,113,113,0.22)");
+      eleGrad.addColorStop(1, "rgba(0,0,0,0)");
+      natGrad = ctx.createLinearGradient(0, 0, 0, ch);
+      natGrad.addColorStop(0, "rgba(74,222,128,0.28)");
+      natGrad.addColorStop(1, "rgba(0,0,0,0)");
+      drawFrame();
     }
-    resize();
-    window.addEventListener("resize", resize);
 
-    function stepAndDraw() {
-      tick++;
-      var w = sc.width / dpr;
-      var h = sc.height / dpr;
-      ctx.clearRect(0, 0, w, h);
+    function drawCurve(arr, stroke, fillGrad) {
+      ctx.beginPath();
+      for (var i = 0; i < arr.length; i++) {
+        var x = (i / (arr.length - 1)) * cw;
+        var y = ch - 6 - arr[i] * (ch - 14);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
 
-      // Subtle grid lines
+      ctx.lineTo(cw, ch);
+      ctx.lineTo(0, ch);
+      ctx.closePath();
+      ctx.fillStyle = fillGrad;
+      ctx.fill();
+    }
+
+    function drawFrame() {
+      ctx.clearRect(0, 0, cw, ch);
       ctx.strokeStyle = "rgba(148,163,184,0.12)";
       ctx.lineWidth = 1;
       for (var g = 1; g <= 3; g++) {
-        var gy = Math.round((h / 4) * g) + 0.5;
-        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+        var gy = Math.round((ch / 4) * g) + 0.5;
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cw, gy); ctx.stroke();
       }
-
-      if (tick % 3 === 0) {
-        nat.shift(); ele.shift();
-        var nVal = 0.04;
-        if (simMode === "stream") {
-          nVal = 0.16 + Math.abs(Math.sin(tick * 0.25)) * 0.18 + Math.random() * 0.06;
-        } else if (simMode === "remote") {
-          nVal = (tick % 18 < 6) ? 0.14 + Math.random() * 0.08 : 0.05;
-        }
-        var eSpike = (tick % 15 === 0) ? 0.26 : 0;
-        var eBase = simMode === "stream" ? 0.64 : 0.44;
-        var eVal = Math.min(0.92, eBase + Math.sin(tick * 0.17) * 0.09 + Math.random() * 0.12 + eSpike);
-        nat.push(nVal);
-        ele.push(eVal);
-      }
-
-      function drawCurve(arr, stroke, fillTop) {
-        ctx.beginPath();
-        for (var i = 0; i < arr.length; i++) {
-          var x = (i / (arr.length - 1)) * w;
-          var y = h - 6 - arr[i] * (h - 14);
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 2.2;
-        ctx.stroke();
-
-        ctx.lineTo(w, h);
-        ctx.lineTo(0, h);
-        ctx.closePath();
-        var grad = ctx.createLinearGradient(0, 0, 0, h);
-        grad.addColorStop(0, fillTop);
-        grad.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = grad;
-        ctx.fill();
-      }
-
-      drawCurve(ele, "#f87171", "rgba(248,113,113,0.22)");
-      drawCurve(nat, "#4ade80", "rgba(74,222,128,0.28)");
-
-      if (!REDUCED) requestAnimationFrame(stepAndDraw);
+      drawCurve(ele, "#f87171", eleGrad);
+      drawCurve(nat, "#4ade80", natGrad);
     }
+
+    function stepAndDraw(ts) {
+      rafId = 0;
+      if (REDUCED || !heroVisible || document.hidden) return;
+      if (ts - lastTs >= 33) {
+        lastTs = ts;
+        tick++;
+        if (tick % 2 === 0) {
+          nat.shift(); ele.shift();
+          var nVal = 0.04;
+          if (simMode === "stream") {
+            nVal = 0.16 + Math.abs(Math.sin(tick * 0.25)) * 0.18 + Math.random() * 0.06;
+          } else if (simMode === "remote") {
+            nVal = (tick % 12 < 4) ? 0.14 + Math.random() * 0.08 : 0.05;
+          }
+          var eSpike = (tick % 10 === 0) ? 0.26 : 0;
+          var eBase = simMode === "stream" ? 0.64 : 0.44;
+          var eVal = Math.min(0.92, eBase + Math.sin(tick * 0.17) * 0.09 + Math.random() * 0.12 + eSpike);
+          nat.push(nVal);
+          ele.push(eVal);
+        }
+        drawFrame();
+      }
+      rafId = requestAnimationFrame(stepAndDraw);
+    }
+
+    function start() {
+      if (!REDUCED && !rafId && heroVisible && !document.hidden) {
+        rafId = requestAnimationFrame(stepAndDraw);
+      }
+    }
+
     // Pre-seed full waveform so static screenshots show lively curves across the entire width
     for (var k = 0; k < N; k++) {
       ele.shift();
       ele.push(0.42 + Math.sin(k * 0.45) * 0.11 + (k % 9 === 0 ? 0.22 : 0.04));
     }
-    stepAndDraw();
+    heroResumeCallbacks.push(start);
+    resize();
+    window.addEventListener("resize", resize, { passive: true });
+    start();
   })();
 
   // Section 2: 24h Uptime Race + Replay
