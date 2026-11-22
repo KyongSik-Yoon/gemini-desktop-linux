@@ -12,11 +12,13 @@
 <meta property="og:url" content="https://gemini-desktop.ksyoon.com/">
 <meta property="og:image" content="https://gemini-desktop.ksyoon.com/img/og.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#eef4ff">
+<meta name="theme-color" content="#f5f8ff">
 <link rel="icon" type="image/svg+xml" href="./img/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
 <script>
   (function () {
     var d = document.documentElement, lang, theme;
@@ -33,1166 +35,1520 @@
     d.dataset.theme = theme;
     d.classList.add("js");
     var m = document.querySelector('meta[name="theme-color"]');
-    if (m) m.setAttribute("content", theme === "night" ? "#070b14" : "#eef4ff");
+    if (m) m.setAttribute("content", theme === "night" ? "#050814" : "#f5f8ff");
   })();
 </script>
 <style>
 :root {
-  --g-blue: #4285f4;
-  --g-cyan: #22d3ee;
-  --g-green: #34a853;
-  --g-mint: #4ade80;
-  --g-amber: #fbbc04;
-  --g-coral: #ea4335;
-  --display: "Plus Jakarta Sans", "IBM Plex Sans KR", system-ui, sans-serif;
-  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  --prism-blue: #3b82f6;
+  --prism-cyan: #06b6d4;
+  --prism-mint: #10b981;
+  --prism-violet: #8b5cf6;
+  --prism-coral: #f43f5e;
+  --prism-amber: #f59e0b;
+  --display: "Outfit", "Pretendard Variable", Pretendard, system-ui, -apple-system, sans-serif;
+  --sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "D2Coding", monospace;
-  --wrap: 1140px;
-  --radius: 22px;
+  --wrap: 1180px;
+  --r-lg: 22px;
+  --r-md: 16px;
+  --r-sm: 10px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* ── DAY THEME: Crystal Daylight Prism ── */
 html[data-theme="day"] {
-  --sky: radial-gradient(ellipse at 16% 6%, rgba(66, 133, 244, 0.16) 0%, transparent 46%),
-         radial-gradient(ellipse at 86% 12%, rgba(52, 168, 83, 0.12) 0%, transparent 44%),
-         linear-gradient(180deg, #e7f0fe 0%, #f4f8ff 48%, #eef7f4 100%);
-  --bg: #f4f7fc;
-  --bg-soft: #eaf1fb;
-  --sheet-a: radial-gradient(62% 45% at 88% 8%, rgba(59, 130, 246, 0.11), transparent 60%),
-             radial-gradient(48% 42% at 10% 88%, rgba(16, 185, 129, 0.09), transparent 60%),
-             linear-gradient(180deg, #f9fbff 0%, #eff5fd 100%);
-  --sheet-b: linear-gradient(180deg, #ffffff 0%, #f6f9fe 100%);
-  --sheet-c: radial-gradient(58% 44% at 16% 12%, rgba(14, 165, 233, 0.11), transparent 60%),
-             radial-gradient(52% 44% at 86% 86%, rgba(99, 102, 241, 0.09), transparent 60%),
-             linear-gradient(180deg, #eef4fd 0%, #f3f8fc 100%);
-  --sheet-d: linear-gradient(180deg, #fafcff 0%, #edf3fb 100%);
-  --sheet-border: rgba(255, 255, 255, 0.92);
-  --sheet-shadow: 0 -20px 54px -26px rgba(30, 58, 138, 0.14);
-  --panel: rgba(255, 255, 255, 0.84);
-  --card-bg: rgba(255, 255, 255, 0.90);
-  --panel-solid: #ffffff;
-  --panel-inset: inset 0 1px 0 rgba(255, 255, 255, 0.88);
-  --line: rgba(15, 23, 42, 0.10);
-  --line-strong: rgba(15, 23, 42, 0.17);
-  --ink: #0f172a;
-  --ink-2: #475569;
-  --ink-3: #64748b;
-  --soft: rgba(15, 23, 42, 0.055);
-  --track: rgba(15, 23, 42, 0.085);
+  --bg: #f6f9ff;
+  --bg-alt: #eef4fe;
+  --surface: rgba(255, 255, 255, 0.90);
+  --surface-solid: #ffffff;
+  --surface-subtle: rgba(241, 246, 255, 0.78);
+  --nav-bg: rgba(248, 251, 255, 0.84);
+  --line: rgba(15, 23, 42, 0.09);
+  --line-strong: rgba(15, 23, 42, 0.16);
+  --specular: inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  --ink: #0a1020;
+  --ink-2: #46536b;
+  --ink-3: #687792;
+  --soft: rgba(15, 23, 42, 0.048);
+  --soft-hover: rgba(15, 23, 42, 0.085);
   --accent: #2563eb;
-  --accent-2: #0284c7;
-  --accent-bg: rgba(37, 99, 235, 0.10);
+  --accent-2: #0891b2;
+  --accent-soft: rgba(37, 99, 235, 0.09);
+  --accent-border: rgba(37, 99, 235, 0.28);
   --accent-ink: #ffffff;
-  --ok: #15803d;
-  --ok-bg: rgba(22, 163, 74, 0.12);
-  --bad: #dc2626;
-  --bad-bg: rgba(220, 38, 38, 0.10);
-  --role-amber: #b45309;
-  --wire-track: rgba(37, 99, 235, 0.22);
-  --tool-active-bg: rgba(37, 99, 235, 0.075);
-  --chip-active-bg: rgba(37, 99, 235, 0.11);
-  --chip-active-ink: #1d4ed8;
-  --chip-active-border: rgba(37, 99, 235, 0.30);
-  --hud-bg: rgba(255, 255, 255, 0.90);
-  --hud-border: rgba(15, 23, 42, 0.14);
-  --hud-ink: #0f172a;
-  --hud-stat: #15803d;
-  --shadow: 0 18px 46px -22px rgba(30, 58, 138, 0.18);
-  --shadow-lg: 0 30px 72px -28px rgba(15, 23, 42, 0.22);
-  --code-bg: #0f172a;
-  --code-ink: #e2e8f0;
-  --glow-rgb: 37, 99, 235;
-  --orb-1: rgba(66, 133, 244, 0.22);
-  --orb-2: rgba(52, 168, 83, 0.16);
-  --orb-3: rgba(251, 188, 4, 0.15);
-  --orb-4: rgba(234, 67, 53, 0.11);
-}
-
-html[data-theme="night"] {
-  --sky: radial-gradient(ellipse at 72% 8%, rgba(56, 114, 245, 0.26) 0%, transparent 48%),
-         radial-gradient(ellipse at 18% 22%, rgba(52, 168, 83, 0.14) 0%, transparent 45%),
-         linear-gradient(180deg, #070b14 0%, #0c1324 55%, #0f172a 100%);
-  --bg: #0b1120;
-  --bg-soft: #111a2e;
-  --sheet-a: radial-gradient(66% 48% at 86% 6%, rgba(59, 130, 246, 0.17), transparent 60%),
-             radial-gradient(50% 45% at 12% 88%, rgba(34, 197, 94, 0.11), transparent 60%),
-             linear-gradient(180deg, #0c1324 0%, #101930 100%);
-  --sheet-b: linear-gradient(180deg, #090f1d 0%, #0d1527 100%);
-  --sheet-c: radial-gradient(60% 45% at 18% 10%, rgba(14, 165, 233, 0.18), transparent 60%),
-             radial-gradient(55% 45% at 85% 85%, rgba(139, 92, 246, 0.14), transparent 60%),
-             linear-gradient(180deg, #0b1121 0%, #131c35 100%);
-  --sheet-d: linear-gradient(180deg, #090e1c 0%, #0c1324 100%);
-  --sheet-border: rgba(148, 163, 184, 0.18);
-  --sheet-shadow: 0 -22px 58px -22px rgba(0, 0, 0, 0.62);
-  --panel: rgba(17, 25, 44, 0.84);
-  --card-bg: rgba(17, 25, 44, 0.90);
-  --panel-solid: #131d34;
-  --panel-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --line: rgba(148, 163, 184, 0.16);
-  --line-strong: rgba(148, 163, 184, 0.28);
-  --ink: #f1f5ff;
-  --ink-2: #a5b4cf;
-  --ink-3: #7183a3;
-  --soft: rgba(148, 163, 184, 0.10);
-  --track: rgba(148, 163, 184, 0.15);
-  --accent: #6ea8ff;
-  --accent-2: #38bdf8;
-  --accent-bg: rgba(66, 133, 244, 0.17);
-  --accent-ink: #071226;
-  --ok: #4ade80;
-  --ok-bg: rgba(52, 168, 83, 0.16);
-  --bad: #f87171;
-  --bad-bg: rgba(234, 67, 53, 0.16);
-  --role-amber: #fbbf24;
-  --wire-track: rgba(148, 163, 184, 0.24);
-  --tool-active-bg: rgba(56, 189, 248, 0.10);
-  --chip-active-bg: rgba(56, 189, 248, 0.14);
-  --chip-active-ink: #bae6fd;
-  --chip-active-border: rgba(56, 189, 248, 0.42);
-  --hud-bg: rgba(9, 14, 26, 0.86);
-  --hud-border: rgba(148, 163, 184, 0.26);
-  --hud-ink: #e2e8f0;
-  --hud-stat: #4ade80;
-  --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.68);
-  --shadow-lg: 0 38px 90px -26px rgba(0, 0, 0, 0.82);
-  --code-bg: #070b14;
+  --ok: #059669;
+  --ok-soft: rgba(16, 185, 129, 0.11);
+  --ok-border: rgba(16, 185, 129, 0.28);
+  --bad: #e11d48;
+  --bad-soft: rgba(244, 63, 94, 0.10);
+  --violet: #7c3aed;
+  --violet-soft: rgba(124, 58, 237, 0.10);
+  --amber: #b45309;
+  --code-bg: #0b1120;
+  --code-bg-bar: #0f172a;
+  --code-line: rgba(148, 163, 184, 0.16);
   --code-ink: #e2ebff;
-  --glow-rgb: 96, 165, 250;
-  --orb-1: rgba(66, 133, 244, 0.30);
-  --orb-2: rgba(52, 168, 83, 0.20);
-  --orb-3: rgba(251, 188, 4, 0.14);
-  --orb-4: rgba(234, 67, 53, 0.16);
+  --dot-grid: rgba(37, 99, 235, 0.13);
+  --glow-rgb: 37, 99, 235;
+  --glow-cyan-rgb: 6, 182, 212;
+  --shadow-sm: 0 8px 24px -14px rgba(15, 23, 42, 0.12);
+  --shadow-md: 0 22px 50px -24px rgba(30, 58, 138, 0.16), 0 4px 14px -6px rgba(15, 23, 42, 0.07);
+  --shadow-stage: 0 32px 80px -28px rgba(30, 64, 175, 0.22), 0 8px 24px -12px rgba(15, 23, 42, 0.10);
+  --prism-grad: linear-gradient(110deg, #1d4ed8 0%, #0284c7 46%, #059669 100%);
+  --prism-bar: linear-gradient(90deg, #3b82f6, #06b6d4, #10b981, #8b5cf6);
+  --hero-wash:
+    radial-gradient(62% 52% at 14% 4%, rgba(59, 130, 246, 0.15) 0%, transparent 62%),
+    radial-gradient(54% 46% at 88% 12%, rgba(6, 182, 212, 0.14) 0%, transparent 60%),
+    radial-gradient(48% 42% at 62% 78%, rgba(16, 185, 129, 0.10) 0%, transparent 58%),
+    linear-gradient(180deg, #edf4ff 0%, #f6f9ff 55%, #f4f8ff 100%);
+  --stage-aura:
+    radial-gradient(65% 60% at 25% 20%, rgba(59, 130, 246, 0.22), transparent 70%),
+    radial-gradient(60% 55% at 80% 75%, rgba(16, 185, 129, 0.18), transparent 70%),
+    radial-gradient(55% 50% at 75% 15%, rgba(139, 92, 246, 0.16), transparent 68%);
+  --chart-grid: rgba(15, 23, 42, 0.08);
+  --chart-text: #64748b;
 }
 
-* { box-sizing: border-box; }
-html { scroll-behavior: smooth; scroll-padding-top: 86px; overflow-x: clip; }
+/* ── NIGHT THEME: Midnight Prism Neon ── */
+html[data-theme="night"] {
+  --bg: #050814;
+  --bg-alt: #080d1d;
+  --surface: rgba(13, 20, 38, 0.84);
+  --surface-solid: #0d1529;
+  --surface-subtle: rgba(18, 28, 52, 0.72);
+  --nav-bg: rgba(7, 11, 24, 0.80);
+  --line: rgba(148, 163, 184, 0.14);
+  --line-strong: rgba(148, 163, 184, 0.26);
+  --specular: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --ink: #f3f7ff;
+  --ink-2: #a5b5d4;
+  --ink-3: #6f82a8;
+  --soft: rgba(148, 163, 184, 0.09);
+  --soft-hover: rgba(148, 163, 184, 0.15);
+  --accent: #60a5fa;
+  --accent-2: #22d3ee;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --accent-border: rgba(56, 189, 248, 0.40);
+  --accent-ink: #041024;
+  --ok: #34d399;
+  --ok-soft: rgba(16, 185, 129, 0.15);
+  --ok-border: rgba(52, 211, 153, 0.34);
+  --bad: #fb7185;
+  --bad-soft: rgba(244, 63, 94, 0.16);
+  --violet: #a78bfa;
+  --violet-soft: rgba(139, 92, 246, 0.16);
+  --amber: #fbbf24;
+  --code-bg: #060a16;
+  --code-bg-bar: #0b1122;
+  --code-line: rgba(148, 163, 184, 0.15);
+  --code-ink: #e2ecff;
+  --dot-grid: rgba(96, 165, 250, 0.16);
+  --glow-rgb: 56, 189, 248;
+  --glow-cyan-rgb: 52, 211, 153;
+  --shadow-sm: 0 10px 28px -14px rgba(0, 0, 0, 0.55);
+  --shadow-md: 0 24px 60px -22px rgba(0, 0, 0, 0.72);
+  --shadow-stage: 0 36px 92px -24px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(56, 189, 248, 0.14);
+  --prism-grad: linear-gradient(110deg, #60a5fa 0%, #22d3ee 48%, #34d399 100%);
+  --prism-bar: linear-gradient(90deg, #3b82f6, #22d3ee, #34d399, #a78bfa);
+  --hero-wash:
+    radial-gradient(58% 48% at 74% 8%, rgba(56, 189, 248, 0.22) 0%, transparent 60%),
+    radial-gradient(52% 46% at 16% 18%, rgba(99, 102, 241, 0.22) 0%, transparent 60%),
+    radial-gradient(46% 42% at 62% 84%, rgba(16, 185, 129, 0.14) 0%, transparent 58%),
+    linear-gradient(180deg, #040712 0%, #070d1e 55%, #050814 100%);
+  --stage-aura:
+    radial-gradient(62% 58% at 22% 18%, rgba(59, 130, 246, 0.36), transparent 68%),
+    radial-gradient(58% 54% at 84% 78%, rgba(16, 185, 129, 0.28), transparent 68%),
+    radial-gradient(52% 48% at 78% 12%, rgba(139, 92, 246, 0.30), transparent 65%);
+  --chart-grid: rgba(148, 163, 184, 0.12);
+  --chart-text: #7e91b5;
+}
+
+/* Language switcher */
+html[data-lang="ko"] [lang="en"] { display: none !important; }
+html[data-lang="en"] [lang="ko"] { display: none !important; }
+html[data-theme="day"] .night-only { display: none !important; }
+html[data-theme="night"] .day-only { display: none !important; }
+
+/* Base */
+*, *::before, *::after { box-sizing: border-box; }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 76px;
+  -webkit-text-size-adjust: 100%;
+}
 body {
   margin: 0;
-  background: var(--sky) no-repeat;
-  background-size: 100% 980px;
-  background-color: var(--bg);
+  font-family: var(--sans);
+  font-size: 15.5px;
+  line-height: 1.65;
   color: var(--ink);
-  font: 400 16px/1.7 var(--sans);
-  -webkit-font-smoothing: antialiased;
+  background: var(--bg);
   overflow-x: clip;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-html[data-lang="ko"] body { word-break: keep-all; }
-html[data-lang="ko"] [lang="en"], html[data-lang="en"] [lang="ko"] { display: none !important; }
-html[data-theme="day"] .night-only, html[data-theme="night"] .day-only { display: none !important; }
-
-a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; }
-a:hover { text-decoration: underline; }
+h1, h2, h3, h4, p, ul, pre, figure { margin: 0; }
+h1, h2, h3, h4 {
+  font-family: var(--display);
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  word-break: keep-all;
+}
+p { word-break: keep-all; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: 0; }
 img { max-width: 100%; display: block; }
-code, pre, kbd, .mono { font-family: var(--mono); }
-code { font-size: 0.86em; background: var(--soft); padding: 0.13em 0.42em; border-radius: 6px; overflow-wrap: anywhere; }
-pre code { background: none; padding: 0; font-size: 0.86rem; overflow-wrap: normal; }
-button { font: inherit; color: inherit; cursor: pointer; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-[hidden] { display: none !important; }
-h1, h2, h3, h4 { font-family: var(--display); margin: 0; line-height: 1.18; letter-spacing: -0.025em; text-wrap: balance; }
-p { margin: 0; }
-
-.wrap { width: min(var(--wrap), 100% - 32px); margin-inline: auto; }
-.glass {
-  background: var(--panel);
+code, .mono { font-family: var(--mono); }
+p code, li code, .footnote code {
+  font-size: 0.85em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--soft);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--panel-inset), var(--shadow);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  white-space: nowrap;
+}
+.tool-tab p code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 0.84em;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-/* Mouse-following glow cards */
-.glow { position: relative; }
-.glow::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  background: radial-gradient(280px circle at var(--mx, 50%) var(--my, 50%), rgba(var(--glow-rgb), 0.14), transparent 68%);
+.wrap {
+  width: min(var(--wrap), 100% - 40px);
+  margin-inline: auto;
 }
-.glow:hover::after { opacity: 1; }
 
-/* Scroll reveal */
-html.js .rv {
-  opacity: 0;
-  transform: translateY(24px);
-  transition: opacity 0.72s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.72s cubic-bezier(0.2, 0.8, 0.2, 1);
-  transition-delay: calc(var(--i, 0) * 80ms);
+/* ── Sticky Edge-to-Edge Slim Glass Header ── */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  background: var(--nav-bg);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border-bottom: 1px solid var(--line);
 }
-html.js .rv.in { opacity: 1; transform: none; }
-
-/* Floating Glass Header */
-.top { position: sticky; top: 12px; z-index: 40; margin-top: 12px; }
-.top .bar {
-  position: relative;
+.header-inner {
+  height: 58px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px 8px 14px;
-  border-radius: 18px;
-  overflow: hidden;
-  min-width: 0;
-}
-.top .prog {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 2.5px;
-  width: 100%;
-  background: linear-gradient(90deg, var(--g-blue), var(--g-cyan), var(--g-green), var(--g-amber));
-  transform-origin: 0 50%;
-  transform: scaleX(0);
-  will-change: transform;
-  pointer-events: none;
+  gap: 16px;
 }
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  color: var(--ink);
+  gap: 10px;
   font-family: var(--display);
-  font-weight: 800;
+  font-weight: 700;
   font-size: 15px;
+  letter-spacing: -0.025em;
   white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
 }
-.brand:hover { text-decoration: none; }
-.brand img { width: 27px; height: 27px; border-radius: 7px; flex: none; }
-.brand-name { overflow: hidden; text-overflow: ellipsis; }
-.brand .tag {
-  flex: none;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ok);
-  background: var(--ok-bg);
+.brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  filter: drop-shadow(0 2px 8px rgba(59, 130, 246, 0.28));
+}
+.brand-meta {
+  font: 600 10.5px var(--mono);
+  letter-spacing: 0.02em;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: 6px;
+  color: var(--ok);
+  background: var(--ok-soft);
+  border: 1px solid var(--ok-border);
 }
-.top nav { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
-.top nav a {
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+}
+.nav-links a {
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--ink-2);
-  font-size: 13.8px;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 10px;
-  white-space: nowrap;
-  transition: background 0.18s, color 0.18s;
+  padding: 6px 12px;
+  border-radius: 8px;
+  transition: color 0.18s, background-color 0.18s;
 }
-.top nav a:hover { background: var(--soft); color: var(--ink); text-decoration: none; }
-.top nav a.active { background: var(--accent-bg); color: var(--accent); }
-.spacer { flex: 1; }
-.controls { display: flex; align-items: center; gap: 6px; flex: none; }
+.nav-links a:hover { color: var(--ink); background: var(--soft); }
+.nav-links a.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.header-spacer { flex: 1; }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cmd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 12.5px;
+  transition: border-color 0.18s, color 0.18s, background-color 0.18s;
+}
+.cmd-trigger:hover { color: var(--ink); border-color: var(--line-strong); background: var(--soft-hover); }
+.cmd-trigger kbd {
+  font: 600 10.5px var(--mono);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  color: var(--ink-2);
+}
+.seg-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 2px;
+}
+.seg-toggle button {
+  height: 28px;
+  min-width: 32px;
+  padding: 0 8px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 12px var(--mono);
+  color: var(--ink-2);
+  transition: color 0.18s, background-color 0.18s;
+}
+.seg-toggle button:hover { color: var(--ink); background: var(--surface-solid); }
+.seg-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 0 12px;
-  border-radius: 11px;
-  border: 1px solid var(--line);
-  background: var(--soft);
-  color: var(--ink);
-  font-size: 13px;
+  gap: 7px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 13.5px;
   font-weight: 600;
   white-space: nowrap;
-  transition: transform 0.15s, border-color 0.18s, background 0.18s;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--specular);
+  transition: transform 0.18s var(--ease), border-color 0.18s, background-color 0.18s, box-shadow 0.18s;
 }
-.btn:hover { border-color: var(--accent); text-decoration: none; }
-.btn.icon { width: 36px; padding: 0; }
+.btn:hover { transform: translateY(-1px); border-color: var(--accent-border); background: var(--surface-solid); }
+.btn.sm { height: 32px; padding: 0 13px; font-size: 12.8px; border-radius: 8px; }
 .btn.primary {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
-  color: #ffffff;
   border-color: transparent;
-  box-shadow: 0 10px 24px -10px rgba(37, 99, 235, 0.72);
+  background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
+  color: #ffffff;
+  box-shadow: 0 10px 26px -10px rgba(37, 99, 235, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
-.btn.primary:hover { transform: translateY(-1px); filter: brightness(1.06); }
-.btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+html[data-theme="night"] .btn.primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  color: #031122;
+  font-weight: 700;
+  box-shadow: 0 10px 30px -8px rgba(34, 211, 238, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+.btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px -10px rgba(37, 99, 235, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
 
-/* Ambient Aurora & Particle Field */
-.hero-zone {
-  position: relative;
-  overflow: hidden;
-  contain: layout style paint;
-  padding: clamp(28px, 4.5vw, 52px) 0 96px;
-}
-#bg-field { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-.orbs { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
-.orb {
+.scroll-prog {
   position: absolute;
-  border-radius: 50%;
-  opacity: 0.92;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--prism-bar);
+  transform-origin: left center;
+  transform: scaleX(0);
   will-change: transform;
-  animation: driftOrb 24s ease-in-out infinite alternate;
-}
-.orb.o1 { width: 640px; height: 640px; top: -200px; left: -140px; background: radial-gradient(circle, var(--orb-1) 0%, transparent 70%); }
-.orb.o2 { width: 580px; height: 580px; top: -40px; right: -160px; background: radial-gradient(circle, var(--orb-2) 0%, transparent 70%); animation-duration: 30s; animation-direction: alternate-reverse; }
-.orb.o3 { width: 480px; height: 480px; bottom: -60px; left: 26%; background: radial-gradient(circle, var(--orb-3) 0%, transparent 70%); animation-duration: 34s; }
-.orb.o4 { width: 420px; height: 420px; bottom: -110px; right: 14%; background: radial-gradient(circle, var(--orb-4) 0%, transparent 70%); animation-duration: 27s; animation-direction: alternate-reverse; }
-.offscreen .orb,
-.offscreen .pulse-dot::after,
-.offscreen .grad-shimmer,
-.offscreen .wire-pkt,
-.offscreen .caret { animation-play-state: paused !important; }
-@keyframes driftOrb {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(34px, -22px, 0) scale(1.08); }
-  100% { transform: translate3d(-26px, 28px, 0) scale(0.95); }
+  pointer-events: none;
 }
 
-/* Hero Grid */
+/* ── HERO: Above-the-Fold 2-Column Prism Showcase ── */
+.hero {
+  position: relative;
+  background: var(--hero-wash);
+  padding: 34px 0 54px;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(var(--dot-grid) 1.15px, transparent 1.15px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(ellipse 84% 78% at 52% 40%, #000 18%, transparent 86%);
+  -webkit-mask-image: radial-gradient(ellipse 84% 78% at 52% 40%, #000 18%, transparent 86%);
+  pointer-events: none;
+}
 .hero-grid {
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-  gap: clamp(24px, 3.6vw, 44px);
+  grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+  gap: 36px;
   align-items: center;
 }
-.lede { min-width: 0; }
-.eyebrow {
+
+.hero-eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-size: 12.8px;
-  font-weight: 600;
+  gap: 9px;
+  font: 600 11.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--ink-2);
-  margin-bottom: 18px;
-  box-shadow: var(--shadow);
-}
-.pulse-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--g-green);
-  position: relative;
-  flex: none;
-}
-.pulse-dot::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  border: 2px solid var(--g-green);
-  animation: pulseRing 2.1s ease-out infinite;
-}
-@keyframes pulseRing { 0% { transform: scale(0.6); opacity: 0.9; } 100% { transform: scale(1.9); opacity: 0; } }
-
-.hero-h1 {
-  font-size: clamp(2.1rem, 4.1vw, 3.35rem);
-  font-weight: 800;
-  line-height: 1.14;
   margin-bottom: 16px;
 }
-.hero-h1 .line-mask { display: block; overflow: hidden; padding-bottom: 0.06em; }
-.hero-h1 .line-in {
-  display: block;
-  transform: translateY(108%);
-  transition: transform 0.9s cubic-bezier(0.2, 0.85, 0.2, 1);
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft), 0 0 12px var(--ok);
+  flex: none;
 }
-.hero-zone.on .hero-h1 .line-in { transform: none; }
-.hero-h1 .line-mask:nth-child(2) .line-in { transition-delay: 0.18s; }
-
-.grad-shimmer {
-  background: linear-gradient(96deg, #2563eb 0%, #0ea5e9 28%, #16a34a 58%, #f59e0b 84%, #2563eb 100%);
-  background-size: 220% auto;
+.hero-h1 {
+  font-size: clamp(2.25rem, 3.65vw, 3.25rem);
+  font-weight: 800;
+  line-height: 1.09;
+  letter-spacing: -0.042em;
+  margin-bottom: 16px;
+}
+.hero-h1 .line { display: block; }
+.prism-text {
+  background: var(--prism-grad);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: shimmer 7s linear infinite;
 }
-html[data-theme="night"] .grad-shimmer {
-  background: linear-gradient(96deg, #60a5fa 0%, #38bdf8 28%, #4ade80 58%, #fbbf24 84%, #60a5fa 100%);
-  background-size: 220% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-@keyframes shimmer { to { background-position: 220% center; } }
-
 .hero-sub {
-  font-size: clamp(0.98rem, 1.35vw, 1.09rem);
+  font-size: 15.2px;
+  line-height: 1.68;
   color: var(--ink-2);
-  line-height: 1.72;
   margin-bottom: 22px;
+  max-width: 47ch;
 }
-.hero-sub b { color: var(--ink); font-weight: 700; }
+.hero-sub strong { color: var(--ink); font-weight: 600; }
 
-/* Hero KPI pills */
-.kpi-strip {
+/* Hairline Metric Strip (replaces cluttered pill badges) */
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, auto));
+  gap: 18px;
+  padding: 13px 0;
+  margin-bottom: 22px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.metric-item {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 22px;
+  flex-direction: column;
+  gap: 2px;
 }
-.kpi-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-size: 12.8px;
-  color: var(--ink-2);
+.metric-item + .metric-item {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
 }
-.kpi-pill b { font-family: var(--mono); font-weight: 700; color: var(--ink); }
-.kpi-pill.ok b { color: var(--ok); }
-.kpi-pill.acc b { color: var(--accent); }
+.metric-val {
+  font: 700 19px/1.15 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+.metric-val.ok { color: var(--ok); }
+.metric-val.acc { color: var(--accent); }
+.metric-lbl {
+  font-size: 11.8px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
 
-.cta-stack { display: flex; flex-direction: column; gap: 10px; }
+/* Command Bar + CTA Row */
+.hero-actions { display: grid; gap: 11px; }
 .cmd-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 100%;
+  gap: 10px;
+  padding: 7px 8px 7px 14px;
+  border-radius: 12px;
   background: var(--code-bg);
-  color: var(--code-ink);
   border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 14px;
-  padding: 6px 6px 6px 14px;
-  font: 500 13px var(--mono);
-  box-shadow: var(--shadow);
-}
-.cmd-bar .cmd-txt { overflow-x: auto; white-space: nowrap; scrollbar-width: none; flex: 1; min-width: 0; }
-.cmd-bar .cmd-txt::-webkit-scrollbar { display: none; }
-.cmd-bar .cmd-txt::before { content: "$ "; color: #64748b; }
-.copy-chip {
-  flex: none;
-  border: 0;
-  border-radius: 9px;
-  padding: 7px 12px;
-  background: rgba(96, 165, 250, 0.20);
-  color: #dbeafe;
-  font: 600 12px var(--sans);
-  white-space: nowrap;
-  transition: background 0.18s;
-}
-.copy-chip:hover { background: rgba(96, 165, 250, 0.34); }
-.cta-btns { display: flex; flex-wrap: wrap; gap: 10px; }
-.cta-btns .btn { min-height: 42px; padding: 0 18px; font-size: 14px; border-radius: 13px; }
-
-/* Hero Live Stage (Right Column) */
-.hero-stage { min-width: 0; }
-.stage-card {
-  border-radius: 22px;
-  padding: 12px;
-  background: var(--card-bg);
-  border: 1px solid var(--line-strong);
-  box-shadow: var(--panel-inset), var(--shadow-lg);
-  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.stage-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 6px 10px;
+  box-shadow: var(--shadow-sm);
   min-width: 0;
 }
-.win-dots { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
-.win-dots i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.win-dots i:nth-child(1) { background: #ef4444; }
-.win-dots i:nth-child(2) { background: #f59e0b; }
-.win-dots i:nth-child(3) { background: #22c55e; }
-.win-title {
-  font-family: var(--mono);
-  font-size: 11.8px;
-  color: var(--ink-2);
-  margin-left: 6px;
-  white-space: nowrap;
+.cmd-prompt {
+  font: 600 12.5px var(--mono);
+  color: #34d399;
+  flex: none;
+  user-select: none;
+}
+.cmd-txt {
+  font: 500 12.2px var(--mono);
+  color: #dbeafe;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.stage-mode-pills { display: flex; gap: 4px; flex: none; }
-.mode-pill {
-  border: 1px solid var(--line);
-  background: var(--soft);
-  color: var(--ink-2);
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 11.5px;
-  font-weight: 700;
-  transition: all 0.2s;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
-.mode-pill:hover { color: var(--ink); border-color: var(--line-strong); }
-.mode-pill.active {
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: transparent;
+.copy-btn {
+  flex: none;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 7px;
+  font: 600 11.8px var(--sans);
+  color: #e2ebff;
+  background: rgba(59, 130, 246, 0.24);
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  transition: background-color 0.18s, border-color 0.18s;
+}
+.copy-btn:hover { background: rgba(59, 130, 246, 0.38); border-color: rgba(147, 197, 253, 0.6); }
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
-.stage-viewport {
+/* Hero Right: Native Floating Prism Showcase */
+.stage-wrap {
   position: relative;
-  border-radius: 15px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  background: #0d1117;
-  cursor: zoom-in;
+  min-width: 0;
 }
-.stage-viewport img {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 1860 / 1230;
-  object-fit: cover;
-  transition: transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s ease;
-}
-.stage-viewport:hover img { transform: scale(1.015); }
-.stage-glare {
+.stage-aura {
   position: absolute;
-  inset: 0;
+  inset: -24px -20px -18px;
+  background: var(--stage-aura);
+  filter: blur(36px);
   pointer-events: none;
-  background: linear-gradient(125deg, rgba(255, 255, 255, 0.14) 0%, transparent 40%, transparent 100%);
+  z-index: 0;
 }
-
-/* Live HUD overlay inside hero screenshot during interactive demo */
-.live-hud {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 12px;
+.stage-frame {
+  position: relative;
+  z-index: 1;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--specular), var(--shadow-stage);
+  overflow: hidden;
+  transition: transform 0.28s var(--ease);
+  will-change: transform;
+}
+.stage-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 9px 13px;
-  border-radius: 12px;
-  background: var(--hud-bg);
-  border: 1px solid var(--hud-border);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: var(--hud-ink);
-  font-family: var(--mono);
-  font-size: 11.8px;
-  pointer-events: none;
-  box-shadow: 0 8px 24px -10px rgba(15, 23, 42, 0.22);
-  transition: border-color 0.3s, box-shadow 0.3s, background 0.3s, color 0.3s;
+  padding: 9px 12px 9px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
 }
-.live-hud.burst {
-  border-color: rgba(59, 130, 246, 0.65);
-  box-shadow: 0 0 24px -4px rgba(59, 130, 246, 0.42);
-}
-.live-hud.remote {
-  border-color: rgba(34, 197, 94, 0.65);
-  box-shadow: 0 0 24px -4px rgba(34, 197, 94, 0.38);
-}
-.hud-left { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
-.hud-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
-.live-hud.burst .hud-dot { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-.hud-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hud-stat { flex: none; color: var(--hud-stat); font-weight: 700; }
-
-/* Live Oscilloscope Strip under Screenshot */
-.scope-panel {
-  margin-top: 10px;
-  border-radius: 14px;
-  background: var(--code-bg);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  padding: 10px 12px;
-  color: var(--code-ink);
-}
-.scope-head {
-  display: flex;
+.stage-id {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-  font-family: var(--mono);
-  font-size: 11.2px;
+  min-width: 0;
 }
-.scope-legend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-.scope-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.scope-legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.scope-legend .lg-n i { background: #4ade80; box-shadow: 0 0 8px #4ade80; }
-.scope-legend .lg-e i { background: #f87171; }
-.scope-canvas { display: block; width: 100%; height: 64px; border-radius: 8px; }
-
-.stage-shots-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
-.shot-thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
-.shot-pill {
-  border: 1px solid var(--line);
-  background: var(--panel-solid);
+.stage-id img { width: 16px; height: 16px; flex: none; }
+.stage-title {
+  font: 600 12px var(--mono);
   color: var(--ink-2);
-  border-radius: 10px;
-  padding: 5px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mode-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  flex: none;
+}
+.mode-btn {
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-size: 11.4px;
+  font-weight: 600;
+  color: var(--ink-2);
+  transition: color 0.16s, background-color 0.16s, box-shadow 0.16s;
+  white-space: nowrap;
+}
+.mode-btn:hover { color: var(--ink); }
+.mode-btn.active {
+  background: var(--surface-solid);
+  color: var(--accent);
+  box-shadow: 0 2px 8px -2px rgba(15, 23, 42, 0.18);
+}
+html[data-theme="night"] .mode-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  color: #bae6fd;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.38);
+}
+
+/* Clean Unobstructed Screenshot Viewport */
+.stage-screen {
+  position: relative;
+  background: #090d16;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+.stage-screen img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.zoom-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  font: 600 11px var(--mono);
+  color: #f8fafc;
+  background: rgba(9, 14, 26, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.18s, transform 0.18s;
+  pointer-events: none;
+}
+.stage-screen:hover .zoom-chip { opacity: 1; transform: translateY(0); }
+
+/* Integrated Telemetry Signal Dock (below screenshot, never covering it) */
+.signal-dock {
+  background: var(--code-bg);
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  padding: 10px 14px 10px;
+  color: #dbeafe;
+}
+.signal-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font: 500 11.5px var(--mono);
+}
+.signal-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #cbd5e1;
+}
+.signal-status span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sig-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 10px #34d399;
+  flex: none;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+.signal-dock.mode-stream .sig-led { background: #22d3ee; box-shadow: 0 0 10px #22d3ee; }
+.signal-dock.mode-remote .sig-led { background: #a78bfa; box-shadow: 0 0 10px #a78bfa; }
+.signal-stat {
+  font-weight: 700;
+  color: #34d399;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+.signal-dock.mode-stream .signal-stat { color: #22d3ee; }
+.signal-dock.mode-remote .signal-stat { color: #c4b5fd; }
+
+.scope-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 14px;
+  font: 500 10.8px var(--mono);
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+.scope-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.scope-legend i { width: 8px; height: 2.5px; border-radius: 2px; display: inline-block; }
+.scope-legend .lg-n i { background: #34d399; box-shadow: 0 0 8px #34d399; }
+.scope-legend .lg-e i { background: #fb7185; box-shadow: 0 0 8px #fb7185; }
+.scope-legend b { color: #f1f5f9; font-weight: 600; }
+
+.scope-canvas {
+  width: 100%;
+  height: 54px;
+  display: block;
+}
+
+/* Integrated Bottom Shot Strip */
+.shot-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  background: var(--surface-subtle);
+}
+.shot-tab {
+  position: relative;
+  padding: 9px 6px;
   font-size: 12px;
   font-weight: 600;
-  transition: all 0.18s;
+  color: var(--ink-3);
+  text-align: center;
+  transition: color 0.16s, background-color 0.16s;
+  border-right: 1px solid var(--line);
 }
-.shot-pill:hover { color: var(--ink); border-color: var(--accent); }
-.shot-pill.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
-.stage-footnote { font-size: 11.8px; color: var(--ink-3); text-align: center; margin-top: 10px; }
+.shot-tab:last-child { border-right: 0; }
+.shot-tab:hover { color: var(--ink); background: var(--soft); }
+.shot-tab.active {
+  color: var(--accent);
+  background: var(--surface-solid);
+}
+.shot-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--prism-bar);
+}
 
-/* Unified Theme-Cohesive Layered Sheets */
-.sheet {
+.footnote {
+  margin-top: 9px;
+  text-align: center;
+  font-size: 11.8px;
+  color: var(--ink-3);
+}
+
+/* ── Section Rhythm & Headings ── */
+.sec {
   position: relative;
-  z-index: 3;
-  border-radius: 40px 40px 0 0;
-  margin-top: -36px;
-  padding: clamp(56px, 7vw, 96px) 0 clamp(76px, 8vw, 120px);
-  border-top: 1px solid var(--sheet-border);
-  box-shadow: var(--sheet-shadow);
-  contain: layout style;
-  transition: background-color 0.3s ease, border-color 0.3s ease;
+  padding: 84px 0;
+  border-bottom: 1px solid var(--line);
 }
-.sheet.last { padding-bottom: 0; }
-.sheet-a { background: var(--sheet-a); }
-.sheet-b { background: var(--sheet-b); }
-.sheet-c { background: var(--sheet-c); }
-.sheet-d { background: var(--sheet-d); }
-
-.sec-head { max-width: 740px; margin-bottom: clamp(26px, 4vw, 42px); }
-.sec-head.center { margin-inline: auto; text-align: center; }
-.kicker {
-  display: inline-block;
-  font: 700 11.8px var(--mono);
+.sec.alt { background: var(--bg-alt); }
+.sec.last { border-bottom: 0; padding-bottom: 36px; }
+.sec-head {
+  max-width: 680px;
+  margin-bottom: 36px;
+}
+.sec-head.center {
+  text-align: center;
+  margin-inline: auto;
+}
+.sec-idx {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 700 11.5px var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--accent);
-  background: var(--accent-bg);
-  padding: 4px 11px;
-  border-radius: 999px;
+  margin-bottom: 10px;
+}
+.sec-idx::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+.sec-head h2 {
+  font-size: clamp(1.75rem, 3.1vw, 2.5rem);
+  font-weight: 800;
+  line-height: 1.16;
+  letter-spacing: -0.036em;
   margin-bottom: 12px;
 }
-.sec-head h2 { font-size: clamp(1.7rem, 3.5vw, 2.65rem); font-weight: 800; margin-bottom: 12px; }
-.sec-head p { color: var(--ink-2); font-size: clamp(0.97rem, 1.35vw, 1.07rem); }
+.sec-head p {
+  font-size: 15.2px;
+  color: var(--ink-2);
+  line-height: 1.68;
+}
 
-/* Section 2: 24h Resource Race + Measured ps */
-.race-grid {
+/* ── Prism Bento Card (mouse spotlight edge glow) ── */
+.bento {
+  position: relative;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 24px;
+  box-shadow: var(--specular), var(--shadow-sm);
+  overflow: hidden;
+  min-width: 0;
+  transition: border-color 0.22s, box-shadow 0.22s;
+}
+.bento::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(360px circle at var(--mx, -400px) var(--my, -400px), rgba(var(--glow-rgb), 0.10), transparent 64%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.bento:hover::before { opacity: 1; }
+.bento:hover { border-color: var(--line-strong); box-shadow: var(--specular), var(--shadow-md); }
+.bento > * { position: relative; z-index: 1; }
+
+/* Reveal Animation */
+html.js .rv {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.55s var(--ease), transform 0.55s var(--ease);
+}
+html.js .rv.in { opacity: 1; transform: none; }
+
+/* ── SECTION 01: Telemetry Divergence Chart + Breakdown + 10 Invariants ── */
+.tele-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr);
   gap: 20px;
   align-items: stretch;
+  margin-bottom: 24px;
 }
-.card {
-  background: var(--card-bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 24px;
-  box-shadow: var(--panel-inset), var(--shadow);
-  min-width: 0;
-  max-width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.race-top {
+.card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
 }
-.race-top h3 { font-size: 1.18rem; }
-.race-ctrls { display: flex; align-items: center; gap: 8px; }
-.time-badge {
-  font: 700 13px var(--mono);
+.card-head h3 { font-size: 1.15rem; font-weight: 700; }
+.chart-ctrls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.time-readout {
+  font: 700 12.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+  padding: 4px 10px;
+  border-radius: 7px;
   color: var(--accent);
-  background: var(--accent-bg);
-  padding: 5px 11px;
-  border-radius: 9px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
 }
-.slider-row {
+
+/* Live Comparison Readout Strip above SVG */
+.div-readouts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.div-stat {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+}
+.div-stat .lbl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin-bottom: 4px;
+}
+.div-stat .lbl i { width: 7px; height: 7px; border-radius: 50%; }
+.div-stat.native .lbl i { background: var(--ok); }
+.div-stat.electron .lbl i { background: var(--bad); }
+.div-stat.ratio .lbl i { background: var(--accent); }
+.div-stat .num {
+  font: 700 18px/1.15 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.div-stat.native .num { color: var(--ok); }
+.div-stat.electron .num { color: var(--bad); }
+.div-stat.ratio .num { color: var(--accent); }
+.div-stat .sub {
+  font: 500 11px var(--mono);
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+/* SVG Divergence Area Chart */
+.chart-box {
+  position: relative;
+  border-radius: 14px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  padding: 12px 12px 6px;
+  margin-bottom: 14px;
+}
+.div-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+.div-svg text {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  fill: var(--chart-text);
+}
+
+.slider-bar {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 18px;
-  font-size: 13px;
+  margin-bottom: 14px;
+  font-size: 12.8px;
   color: var(--ink-2);
 }
-.slider-row input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
-
-.lanes { display: flex; flex-direction: column; gap: 16px; margin-bottom: 18px; }
-.lane .lane-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 7px;
-  font-size: 13.8px;
+.slider-bar input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 5px;
 }
-.lane .lane-meta strong { color: var(--ink); }
-.lane .lane-meta .val { font: 700 13.5px var(--mono); }
-.lane.native .val { color: var(--ok); }
-.lane.electron .val { color: var(--bad); }
-.lane-track {
-  position: relative;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--track);
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.12);
-  overflow: hidden;
-  padding: 3px;
-}
-.lane-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.25s cubic-bezier(0.22, 1, 0.36, 1);
-  position: relative;
-}
-.lane.native .lane-fill {
-  background: linear-gradient(90deg, #16a34a, #0ea5e9);
-  box-shadow: 0 0 14px rgba(14, 165, 233, 0.38);
-}
-.lane.electron .lane-fill {
-  background: linear-gradient(90deg, #f59e0b, #ef4444);
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.35);
-}
-.anchor-pin {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: 600 11.5px var(--mono);
-  color: var(--ok);
-  margin-bottom: 12px;
-}
-.anchor-pin i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 
 .ps-box {
   background: var(--code-bg);
   color: var(--code-ink);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 15px 16px;
-  font: 400 12.6px/1.65 var(--mono);
+  border: 1px solid var(--code-line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font: 400 12px/1.62 var(--mono);
   overflow-x: auto;
-  max-width: 100%;
-  margin: 0 0 14px;
+  margin-bottom: 10px;
 }
 .ps-box .c-dim { color: #7e8da8; }
-.ps-box .c-ok { color: #4ade80; font-weight: 700; }
-.ps-box .c-blue { color: #6ea8ff; font-weight: 700; }
-.sim-note { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; margin-top: auto; }
+.ps-box .c-blue { color: #60a5fa; font-weight: 600; }
+.ps-box .c-ok { color: #34d399; font-weight: 600; }
+.sim-note { font-size: 11.8px; color: var(--ink-3); line-height: 1.55; }
 
-.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.cmp-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.cmp-table th, .cmp-table td { padding: 11px 8px; border-bottom: 1px solid var(--line); text-align: left; }
-.cmp-table th { color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); text-transform: uppercase; }
-.cmp-table td.good { color: var(--ok); font-weight: 700; }
-.cmp-table td.bad { color: var(--ink-2); }
+/* Breakdown Table */
+.cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.4px;
+}
+.cmp-table th {
+  text-align: left;
+  font: 600 11px var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 0 8px 10px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.cmp-table td {
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
 .cmp-table tr:last-child td { border-bottom: 0; }
-.cmp-callout {
-  margin-top: auto;
+.cmp-table td:first-child { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.cmp-table td.good { color: var(--ok); font-weight: 600; }
+.cmp-table td.bad { color: var(--ink-3); }
+
+.guard-callout {
+  margin-top: 16px;
   padding: 14px 16px;
   border-radius: 14px;
-  background: var(--ok-bg);
-  border: 1px solid color-mix(in srgb, var(--ok) 26%, transparent);
+  background: var(--ok-soft);
+  border: 1px solid var(--ok-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.guard-callout strong { font-size: 13.8px; color: var(--ok); }
+.guard-callout p { font-size: 12.6px; color: var(--ink-2); }
+.guard-cmd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  color: #34d399;
+  font: 500 12px var(--mono);
 }
-.cmp-callout strong { font-size: 13.5px; color: var(--ok); display: block; }
-.cmp-callout span { font-size: 12.2px; color: var(--ink-2); }
-.cmp-callout code { font-size: 11.5px; color: var(--ink); background: var(--panel-solid); border: 1px solid var(--line); }
 
-/* 6 Invariant Glow Cards */
-.inv-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 22px;
-}
-.inv-card {
-  background: var(--card-bg);
+/* 10 Static CI Invariants Matrix */
+.inv-panel {
+  border-radius: var(--r-lg);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 20px;
-  min-width: 0;
-  box-shadow: var(--panel-inset), var(--shadow);
-  transition: transform 0.2s, border-color 0.2s;
+  padding: 22px 24px;
+  box-shadow: var(--specular), var(--shadow-sm);
 }
-.inv-card:hover { transform: translateY(-3px); border-color: var(--accent); }
-.inv-badge {
-  display: inline-block;
-  font: 700 11px var(--mono);
-  padding: 3px 8px;
+.inv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.inv-header-left h3 { font-size: 1.08rem; font-weight: 700; margin-bottom: 2px; }
+.inv-header-left p { font-size: 13px; color: var(--ink-3); }
+.filter-seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  gap: 2px;
+}
+.filter-btn {
+  padding: 5px 11px;
   border-radius: 7px;
-  background: var(--accent-bg);
+  font: 600 12px var(--mono);
+  color: var(--ink-2);
+  transition: color 0.16s, background-color 0.16s;
+}
+.filter-btn:hover { color: var(--ink); }
+.filter-btn.active {
+  background: var(--surface-solid);
   color: var(--accent);
+  box-shadow: 0 2px 6px -2px rgba(15, 23, 42, 0.16);
+}
+html[data-theme="night"] .filter-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  color: #bae6fd;
+}
+.inv-matrix {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+.inv-item {
+  padding: 13px 14px;
+  border-radius: 13px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color 0.18s, transform 0.18s var(--ease);
+}
+.inv-item:hover { border-color: var(--accent-border); transform: translateY(-2px); }
+.inv-item[hidden] { display: none; }
+.inv-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 10.5px var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.inv-code.go { color: var(--ok); }
+.inv-code::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.inv-item h4 { font-size: 13.2px; font-weight: 700; line-height: 1.3; }
+.inv-item p { font-size: 12px; color: var(--ink-2); line-height: 1.5; }
+
+/* ── SECTION 02: Real HiDPI Workspace Showcase ── */
+.curtain-bento {
+  display: grid;
+  grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  gap: 28px;
+  align-items: center;
+  margin-bottom: 22px;
+}
+.story-copy h3 {
+  font-size: clamp(1.3rem, 2.2vw, 1.65rem);
+  font-weight: 800;
+  line-height: 1.22;
   margin-bottom: 10px;
 }
-.inv-badge.go { background: var(--ok-bg); color: var(--ok); }
-.inv-card h3 { font-size: 1.04rem; margin-bottom: 6px; }
-.inv-card p { font-size: 13.6px; color: var(--ink-2); line-height: 1.62; }
-
-/* Section 3: Interactive Theme Curtain + Split Showcases */
-.split-stack { display: flex; flex-direction: column; gap: clamp(44px, 7vw, 84px); }
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-  gap: clamp(22px, 4vw, 52px);
-  align-items: center;
+.story-copy > p {
+  font-size: 14.5px;
+  color: var(--ink-2);
+  margin-bottom: 18px;
 }
-.split.flip { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
-.split.flip .split-text { order: 2; }
-.split-text { min-width: 0; }
-.split-text h3 { font-size: clamp(1.38rem, 2.5vw, 1.95rem); font-weight: 800; margin-bottom: 12px; }
-.split-text > p { color: var(--ink-2); font-size: 1rem; margin-bottom: 18px; }
-
-.bullet-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
-.bullet-list li {
+.feature-points {
+  list-style: none;
+  padding: 0;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
   gap: 12px;
+  margin-bottom: 18px;
+}
+.feature-points li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
 }
-.bullet-list .num {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  background: var(--accent-bg);
+.pt-num {
+  font: 700 11px var(--mono);
   color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  height: 24px;
+  width: 26px;
+  border-radius: 7px;
   display: grid;
   place-items: center;
-  font: 700 12px var(--mono);
+  margin-top: 2px;
 }
-.bullet-list b { display: block; color: var(--ink); font-size: 0.98rem; margin-bottom: 2px; }
-.bullet-list span { color: var(--ink-2); font-size: 0.92rem; }
+.feature-points b { display: block; font-size: 13.8px; margin-bottom: 2px; }
+.feature-points span { display: block; font-size: 12.8px; color: var(--ink-2); line-height: 1.52; }
 
-/* Interactive Before/After Theme Curtain */
-.curtain-wrap { min-width: 0; }
+.curtain-snaps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.snap-btn {
+  padding: 5px 10px;
+  border-radius: 8px;
+  font: 600 11.8px var(--mono);
+  color: var(--ink-2);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  transition: color 0.16s, border-color 0.16s, background-color 0.16s;
+}
+.snap-btn:hover { color: var(--ink); border-color: var(--accent-border); background: var(--accent-soft); }
+
+/* Interactive Curtain Frame */
+.curtain-box { min-width: 0; }
 .curtain {
   position: relative;
-  border-radius: 20px;
+  border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  box-shadow: var(--shadow-lg);
-  aspect-ratio: 1860 / 1230;
-  background: #0d1117;
+  box-shadow: var(--shadow-md);
   user-select: none;
-  touch-action: pan-y;
+  touch-action: none;
   cursor: ew-resize;
+  background: #090d16;
+  --pos: 50%;
 }
 .curtain img {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+.curtain .layer-light {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  pointer-events: none;
-}
-.curtain .layer-light {
-  clip-path: inset(0 0 0 var(--pos, 50%));
+  clip-path: inset(0 0 0 var(--pos));
 }
 .curtain .divider {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: var(--pos, 50%);
-  width: 3px;
-  margin-left: -1.5px;
-  background: #ffffff;
-  box-shadow: 0 0 18px rgba(37, 99, 235, 0.85);
+  left: var(--pos);
+  width: 2px;
+  transform: translateX(-1px);
+  background: linear-gradient(180deg, #3b82f6, #22d3ee, #34d399);
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.85);
   pointer-events: none;
 }
 .curtain .knob {
   position: absolute;
   top: 50%;
-  left: var(--pos, 50%);
-  transform: translate(-50%, -50%);
-  width: 44px;
-  height: 44px;
+  left: var(--pos);
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  color: #ffffff;
-  border: 3px solid #ffffff;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  transform: translate(-50%, -50%);
+  background: #0b1120;
+  color: #f8fafc;
+  border: 2px solid #22d3ee;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45), 0 0 18px rgba(34, 211, 238, 0.5);
   display: grid;
   place-items: center;
-  font: 700 14px var(--mono);
+  font: 700 13px var(--mono);
   pointer-events: none;
 }
-.curtain-tag {
+.curtain-badge {
   position: absolute;
   top: 12px;
   padding: 4px 10px;
-  border-radius: 999px;
-  font: 700 11.5px var(--mono);
-  backdrop-filter: blur(10px);
+  border-radius: 7px;
+  font: 600 11px var(--mono);
+  background: rgba(8, 12, 24, 0.76);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.22);
   pointer-events: none;
 }
-.curtain-tag.left { left: 12px; background: rgba(11, 17, 32, 0.78); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.16); }
-.curtain-tag.right { right: 12px; background: rgba(255, 255, 255, 0.86); color: #0f172a; border: 1px solid rgba(15, 23, 42, 0.12); }
-.curtain-hint {
+.curtain-badge.left { left: 12px; }
+.curtain-badge.right { right: 12px; }
+.curtain-foot {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
   margin-top: 10px;
-  font-size: 12.5px;
+  font-size: 12.2px;
   color: var(--ink-3);
 }
 
-.shot-frame {
-  border-radius: 20px;
+/* Dual Feature Screens Bento */
+.dual-screens {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.screen-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.screen-shot {
+  position: relative;
+  border-radius: 13px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  box-shadow: var(--shadow-lg);
-  background: var(--panel-solid);
   cursor: zoom-in;
-  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  background: #090d16;
 }
-.shot-frame:hover { transform: translateY(-4px); }
-.shot-frame img { width: 100%; height: auto; aspect-ratio: 1860 / 1230; object-fit: cover; }
-
-.keys { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 18px; }
-.keys span { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--ink-2); }
-kbd {
-  display: inline-grid;
-  place-items: center;
-  min-width: 30px;
-  height: 30px;
-  padding: 0 8px;
-  border-radius: 8px;
-  background: var(--panel-solid);
-  border: 1px solid var(--line-strong);
-  border-bottom-width: 3px;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 700;
+.screen-shot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  transition: transform 0.35s var(--ease);
 }
-
-/* Section 4: Animated Packet Architecture + Interactive 23-Tool Explorer */
-.arch-stage {
-  background: var(--card-bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 26px;
-  margin-bottom: 22px;
-  box-shadow: var(--panel-inset), var(--shadow);
+.screen-shot:hover img { transform: scale(1.018); }
+.screen-shot:hover .zoom-chip { opacity: 1; transform: translateY(0); }
+.screen-card h3 { font-size: 1.16rem; font-weight: 700; margin-bottom: 6px; }
+.screen-card > .screen-copy p { font-size: 13.8px; color: var(--ink-2); line-height: 1.6; margin-bottom: 12px; }
+.kbd-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-.arch-flow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(76px, 0.55fr) minmax(0, 1.08fr) minmax(76px, 0.55fr) minmax(0, 1fr);
-  gap: 10px;
+.kbd-item {
+  display: inline-flex;
   align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  font-size: 12.2px;
+  color: var(--ink-2);
 }
-.arch-node {
-  background: var(--panel-solid);
+.kbd-item kbd {
+  font: 700 11px var(--mono);
+  color: var(--ink);
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--surface-solid);
   border: 1px solid var(--line-strong);
-  border-radius: 16px;
-  padding: 18px;
-  min-width: 0;
-  box-shadow: var(--panel-inset), 0 8px 24px -16px rgba(15, 23, 42, 0.16);
-  transition: border-color 0.3s, box-shadow 0.3s, transform 0.25s;
+  box-shadow: 0 2px 0 var(--line-strong);
 }
-.arch-node.hit {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-.arch-node .role { font: 700 11px var(--mono); color: var(--accent); margin-bottom: 5px; }
-.arch-node.daemon .role { color: var(--ok); }
-.arch-node.cloud .role { color: var(--role-amber); }
-.arch-node h3 { font-size: 1.06rem; margin-bottom: 6px; }
-.arch-node p { font-size: 13px; color: var(--ink-2); line-height: 1.55; }
+.mini-tag {
+  font: 600 11.4px var(--mono);
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
 
-.wire {
-  position: relative;
-  height: 68px;
+/* ── SECTION 03: Live Prism Pipeline + 23-Tool Explorer ── */
+.pipe-stage {
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 24px;
+  box-shadow: var(--specular), var(--shadow-sm);
+  margin-bottom: 20px;
+}
+.pipe-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px minmax(0, 1.08fr) 128px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.pipe-node {
+  padding: 18px;
+  border-radius: 16px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s;
+}
+.pipe-node.daemon {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.pipe-node.hit {
+  border-color: var(--ok);
+  box-shadow: 0 0 0 2px var(--ok-soft), 0 0 28px -6px rgba(16, 185, 129, 0.55);
+  transform: translateY(-2px);
+}
+.pipe-role {
+  font: 700 10.5px var(--mono);
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 5px;
+}
+.pipe-node.daemon .pipe-role { color: var(--ok); }
+.pipe-node.cloud .pipe-role { color: var(--violet); }
+.pipe-node h3 { font-size: 1.08rem; font-weight: 800; margin-bottom: 6px; }
+.pipe-node p { font-size: 12.6px; color: var(--ink-2); line-height: 1.5; }
+
+.pipe-wire {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
 }
-.wire-line {
+.wire-track {
   position: relative;
   width: 100%;
-  height: 12px;
-  overflow: hidden;
-}
-.wire-line::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
   height: 3px;
-  margin-top: -1.5px;
-  border-radius: 999px;
-  background: var(--wire-track);
+  border-radius: 99px;
+  background: var(--line-strong);
+  overflow: hidden;
 }
 .wire-pkt {
   position: absolute;
-  top: 50%;
+  top: 0;
   left: 0;
-  width: 28%;
-  min-width: 20px;
-  height: 8px;
-  margin-top: -4px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, #2563eb, #10b981);
-  will-change: transform, opacity;
-  animation: flyRight 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  width: 44%;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, transparent, #22d3ee, #34d399);
+  animation: pktRight 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 .wire-pkt.rev {
-  background: linear-gradient(270deg, transparent, #f59e0b, #0ea5e9);
-  animation: flyLeft 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite 1.2s;
+  background: linear-gradient(270deg, transparent, #8b5cf6, #3b82f6);
+  animation: pktLeft 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite 1.1s;
 }
-@keyframes flyRight {
-  0% { transform: translate3d(-100%, 0, 0); opacity: 0; }
-  15% { opacity: 1; }
-  85% { opacity: 1; }
-  100% { transform: translate3d(360%, 0, 0); opacity: 0; }
+.offscreen .wire-pkt { animation-play-state: paused !important; }
+@keyframes pktRight {
+  0% { transform: translate3d(-110%, 0, 0); opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { transform: translate3d(250%, 0, 0); opacity: 0; }
 }
-@keyframes flyLeft {
-  0% { transform: translate3d(360%, 0, 0); opacity: 0; }
-  15% { opacity: 1; }
-  85% { opacity: 1; }
-  100% { transform: translate3d(-100%, 0, 0); opacity: 0; }
+@keyframes pktLeft {
+  0% { transform: translate3d(250%, 0, 0); opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { transform: translate3d(-110%, 0, 0); opacity: 0; }
 }
-.wire-label {
-  margin-top: 10px;
-  font: 600 10.8px var(--mono);
+.wire-lbl {
+  font: 600 10.5px var(--mono);
   color: var(--ink-3);
-  text-align: center;
   white-space: nowrap;
 }
 
-/* Interactive 23-Tool Explorer */
-.tool-explorer {
+.tool-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   gap: 18px;
   align-items: stretch;
 }
-.tool-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tool-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
 .tool-tab {
   text-align: left;
-  background: var(--card-bg);
-  border: 1px solid var(--line);
-  border-radius: 16px;
   padding: 16px;
-  box-shadow: var(--panel-inset), 0 10px 26px -20px rgba(15, 23, 42, 0.18);
-  transition: transform 0.2s, border-color 0.2s, background-color 0.2s;
+  border-radius: 15px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--specular);
+  transition: transform 0.18s var(--ease), border-color 0.18s, background-color 0.18s, box-shadow 0.18s;
   min-width: 0;
 }
 .tool-tab:hover { border-color: var(--line-strong); transform: translateY(-2px); }
 .tool-tab.active {
   border-color: var(--accent);
-  background: var(--tool-active-bg);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent), var(--shadow);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-border), var(--shadow-sm);
 }
-.tool-tab h4 { font-size: 0.98rem; margin-bottom: 5px; color: var(--ink); }
-.tool-tab p { font-size: 12.8px; color: var(--ink-2); margin-bottom: 10px; line-height: 1.5; }
-.chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.chip {
-  font: 500 11px var(--mono);
+.tool-tab h4 { font-size: 0.96rem; font-weight: 700; margin-bottom: 5px; }
+.tool-tab p { font-size: 12.6px; color: var(--ink-2); line-height: 1.5; margin-bottom: 10px; }
+.tool-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.tool-chip {
+  font: 500 10.8px var(--mono);
   padding: 2px 7px;
   border-radius: 6px;
   background: var(--soft);
   border: 1px solid var(--line);
-  color: var(--ink);
+  color: var(--ink-2);
 }
-.tool-tab.active .chip {
-  background: var(--chip-active-bg);
-  border-color: var(--chip-active-border);
-  color: var(--chip-active-ink);
+.tool-tab.active .tool-chip {
+  background: var(--surface-solid);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+html[data-theme="night"] .tool-tab.active .tool-chip {
+  background: rgba(56, 189, 248, 0.14);
+  color: #bae6fd;
 }
 
-.tool-console {
+.console-card {
   background: var(--code-bg);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--code-line);
   border-radius: 18px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--shadow-md);
   min-width: 0;
 }
-.console-bar {
+.console-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  font: 600 12px var(--mono);
+  padding: 11px 15px;
+  background: var(--code-bg-bar);
+  border-bottom: 1px solid var(--code-line);
+  font: 600 11.8px var(--mono);
   color: #94a3b8;
 }
+.console-ready { color: #34d399; white-space: nowrap; }
 .console-body {
-  padding: 16px;
-  font: 400 12.8px/1.7 var(--mono);
+  padding: 16px 18px;
+  font: 400 12.6px/1.72 var(--mono);
   color: #e2ebff;
   flex: 1;
-  min-height: 230px;
+  min-height: 232px;
   overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .console-body .c-k { color: #38bdf8; font-weight: 600; }
-.console-body .c-g { color: #4ade80; }
+.console-body .c-g { color: #34d399; }
 .console-body .c-y { color: #fbbf24; }
 .console-body .c-d { color: #7e8da8; }
 .caret {
   display: inline-block;
-  width: 8px;
+  width: 7px;
   height: 1.05em;
-  background: #38bdf8;
+  background: #22d3ee;
   vertical-align: -2px;
   animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* Section 5: Install + Footer */
+/* ── SECTION 04: Quick Start & Footer ── */
 .install-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.22fr) minmax(0, 0.78fr);
+  grid-template-columns: minmax(0, 1.24fr) minmax(0, 0.76fr);
   gap: 20px;
   align-items: start;
 }
-.code-card {
+.term-card {
   background: var(--code-bg);
   color: var(--code-ink);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border: 1px solid var(--code-line);
+  border-radius: var(--r-lg);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-md);
   min-width: 0;
-  max-width: 100%;
 }
-.code-head {
+.term-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 11px 15px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  font: 500 12.5px var(--mono);
-  color: #94a3b8;
+  padding: 9px 12px;
+  background: var(--code-bg-bar);
+  border-bottom: 1px solid var(--code-line);
+  flex-wrap: wrap;
 }
-.code-card pre { margin: 0; padding: 16px 18px; overflow-x: auto; max-width: 100%; line-height: 1.68; }
-.code-card .c-cm { color: #7c8ca8; }
-.code-card .c-cmd { color: #93c5fd; font-weight: 600; }
-.req-list { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; font-size: 14px; color: var(--ink-2); }
-.req-list b { color: var(--ink); }
+.term-tabs {
+  display: inline-flex;
+  gap: 4px;
+}
+.term-tab {
+  padding: 5px 10px;
+  border-radius: 7px;
+  font: 600 11.8px var(--mono);
+  color: #94a3b8;
+  transition: color 0.16s, background-color 0.16s;
+}
+.term-tab:hover { color: #f8fafc; }
+.term-tab.active {
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.16);
+}
+.term-card pre {
+  margin: 0;
+  padding: 18px 20px;
+  overflow-x: auto;
+  font: 400 12.8px/1.72 var(--mono);
+}
+.term-card pre[hidden] { display: none; }
+.term-card .c-cm { color: #7c8ca8; }
+.term-card .c-cmd { color: #60a5fa; font-weight: 600; }
+
+.req-list {
+  list-style: none;
+  padding: 0;
+  margin-top: 14px;
+  display: grid;
+  gap: 11px;
+  font-size: 13.8px;
+  color: var(--ink-2);
+}
+.req-list li {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.req-list li:last-child { padding-bottom: 0; border-bottom: 0; }
+.req-list b { color: var(--ink); font-weight: 600; }
 
 footer {
-  margin-top: 64px;
-  padding: 26px 0 46px;
+  margin-top: 56px;
+  padding: 24px 0 10px;
   border-top: 1px solid var(--line);
   color: var(--ink-3);
-  font-size: 13.5px;
+  font-size: 13px;
 }
 .foot-in {
   display: flex;
@@ -1202,25 +1558,28 @@ footer {
   gap: 12px 20px;
 }
 .foot-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.foot-links a { transition: color 0.16s; }
+.foot-links a:hover { color: var(--accent); }
 
-/* Lightbox */
+/* ── Lightbox ── */
 .lightbox {
   position: fixed;
   inset: 0;
-  z-index: 90;
-  background: rgba(6, 10, 18, 0.92);
-  backdrop-filter: blur(12px);
+  z-index: 95;
+  background: rgba(4, 7, 16, 0.92);
+  backdrop-filter: blur(14px);
   display: flex;
   flex-direction: column;
   padding: 18px;
 }
+.lightbox[hidden] { display: none; }
 .lb-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   color: #e2e8f0;
-  font-size: 13.5px;
+  font-size: 13px;
   margin-bottom: 12px;
 }
 #lb-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -1230,71 +1589,125 @@ footer {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   padding: 6px 12px;
-  border-radius: 9px;
-  font-size: 13px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
 }
+.lb-btn:hover { background: rgba(255, 255, 255, 0.16); }
 .lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
-.lb-stage img { max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.72); }
+.lb-stage img { max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 28px 72px rgba(0, 0, 0, 0.78); }
 .lb-cap { text-align: center; color: #cbd5e1; font-size: 13.5px; margin-top: 12px; }
 
-/* Responsive */
-@media (max-width: 1020px) {
-  .hero-grid { grid-template-columns: minmax(0, 1fr); }
-  .race-grid, .install-grid, .tool-explorer { grid-template-columns: minmax(0, 1fr); }
-  .inv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .split, .split.flip { grid-template-columns: minmax(0, 1fr); }
-  .split.flip .split-text { order: 0; }
-  .arch-flow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .wire { height: 42px; flex-direction: row; gap: 10px; }
-  .wire-line { width: 96px; flex: none; }
-  .wire-label { margin-top: 0; }
-  .top nav { display: none; }
+/* ── Command Palette (Ctrl+K / ⌘K) ── */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(4, 8, 20, 0.62);
+  backdrop-filter: blur(10px);
+  display: grid;
+  place-items: start center;
+  padding: 12vh 16px 20px;
+}
+.palette-backdrop[hidden] { display: none; }
+.palette-modal {
+  width: min(520px, 100%);
+  border-radius: 18px;
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 32px 84px -18px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(56, 189, 248, 0.16);
+  overflow: hidden;
+}
+.palette-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.palette-head input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 500 14.5px var(--sans);
+  outline: none;
+}
+.palette-head kbd {
+  font: 600 10.5px var(--mono);
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+}
+.palette-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+}
+.pal-item {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  color: var(--ink);
+  transition: background-color 0.12s;
+}
+.pal-item:hover, .pal-item.sel { background: var(--accent-soft); color: var(--accent); }
+.pal-item small { font: 500 11px var(--mono); color: var(--ink-3); }
+.pal-empty { padding: 20px; text-align: center; font-size: 13px; color: var(--ink-3); }
+
+/* ── Responsive ── */
+@media (max-width: 1080px) {
+  .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .tele-grid, .curtain-bento, .install-grid, .tool-grid { grid-template-columns: minmax(0, 1fr); }
+  .inv-matrix { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dual-screens { grid-template-columns: minmax(0, 1fr); }
+  .pipe-flow { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .pipe-wire { flex-direction: row; justify-content: center; }
+  .wire-track { width: 110px; }
+  .nav-links, .cmd-trigger { display: none; }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .wrap { width: min(var(--wrap), 100% - 24px); }
-  .top { top: 8px; margin-top: 8px; }
-  .top .bar { padding: 7px 9px 7px 11px; gap: 6px; border-radius: 15px; }
-  .brand { font-size: 13.5px; gap: 7px; }
-  .brand img { width: 24px; height: 24px; }
-  .brand .tag { display: none; }
-  .btn { min-height: 33px; padding: 0 10px; font-size: 12.5px; border-radius: 9px; }
-  .btn.icon { width: 33px; }
-
-  .hero-zone { padding: 20px 0 68px; }
-  .eyebrow { display: flex; width: 100%; border-radius: 14px; padding: 8px 12px; font-size: 12.2px; line-height: 1.45; }
-  .hero-h1 { font-size: clamp(1.8rem, 7.6vw, 2.3rem); }
-  .hero-sub { font-size: 0.95rem; }
-  .kpi-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-  .kpi-pill { padding: 7px 9px; font-size: 11.8px; justify-content: center; }
-  .kpi-strip .kpi-pill:last-child { grid-column: 1 / -1; }
-  .cta-btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .cta-btns .btn { width: 100%; padding: 0 10px; font-size: 13px; }
-
-  .stage-card { padding: 9px; border-radius: 18px; }
-  .stage-top { flex-direction: column; align-items: stretch; gap: 8px; padding: 2px 2px 8px; }
-  .stage-mode-pills { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
-  .mode-pill { text-align: center; padding: 5px 4px; font-size: 11px; }
-  .live-hud { left: 8px; right: 8px; bottom: 8px; padding: 7px 9px; font-size: 10.5px; }
-  .scope-panel { padding: 8px 10px; }
-  .scope-head { font-size: 10.5px; }
-  .shot-thumbs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; gap: 6px; }
-  .shot-pill { text-align: center; padding: 6px 6px; font-size: 11.5px; }
-
-  .sheet { border-radius: 28px 28px 0 0; margin-top: -26px; padding: 44px 0 64px; }
-  .card, .arch-stage { padding: 16px; border-radius: 18px; }
-  .inv-grid, .tool-tabs { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .lane .lane-meta { flex-direction: column; align-items: flex-start; gap: 2px; font-size: 13px; }
-  .ps-box { padding: 12px; font-size: 11px; }
-  .cmp-table { font-size: 12px; }
-  .cmp-table th, .cmp-table td { padding: 8px 6px; }
-  .curtain .knob { width: 38px; height: 38px; font-size: 12px; }
-  .curtain-tag { font-size: 10.5px; padding: 3px 8px; }
-  .curtain-hint { flex-direction: column; align-items: flex-start; gap: 4px; }
-  .console-body { font-size: 11.6px; min-height: 200px; }
-  .code-card pre { padding: 13px 14px; }
-  .code-card pre code { font-size: 11.8px; }
-  .lb-bar { flex-wrap: wrap; }
+  .header-inner { height: 52px; gap: 8px; }
+  .brand { font-size: 13.8px; gap: 7px; }
+  .brand img { width: 22px; height: 22px; }
+  .brand-meta { display: none; }
+  .btn.sm { padding: 0 10px; font-size: 12px; }
+  .hero { padding: 22px 0 38px; }
+  .hero-eyebrow { font-size: 10.6px; letter-spacing: 0.03em; gap: 7px; }
+  .hero-h1 { font-size: clamp(1.85rem, 8vw, 2.35rem); }
+  .metric-strip { gap: 10px; }
+  .metric-item + .metric-item { padding-left: 10px; }
+  .metric-val { font-size: 16px; }
+  .metric-lbl { font-size: 10.8px; }
+  .cta-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cta-row .btn { width: 100%; padding: 0 10px; font-size: 12.8px; }
+  .stage-bar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .mode-seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mode-btn { text-align: center; padding: 5px 4px; font-size: 11px; }
+  .shot-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shot-tab:nth-child(2) { border-right: 0; }
+  .shot-tab:nth-child(1), .shot-tab:nth-child(2) { border-bottom: 1px solid var(--line); }
+  .sec { padding: 54px 0; }
+  .bento, .inv-panel, .pipe-stage { padding: 16px; border-radius: 18px; }
+  .div-readouts { grid-template-columns: minmax(0, 1fr); }
+  .inv-matrix, .tool-tabs { grid-template-columns: minmax(0, 1fr); }
+  .cmp-table { font-size: 12.2px; }
+  .cmp-table th, .cmp-table td { padding: 9px 5px; }
+  .curtain-foot { flex-direction: column; align-items: flex-start; }
+  .console-body { font-size: 11.6px; }
+  .term-card pre { padding: 14px; font-size: 11.6px; }
 }
 
 @media (max-width: 390px) {
@@ -1305,210 +1718,256 @@ footer {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   html.js .rv { opacity: 1 !important; transform: none !important; }
-  .hero-h1 .line-in { transform: none !important; }
 }
 </style>
 </head>
 <body>
 
-<header class="top wrap">
-  <div class="bar glass">
+<header class="site-header">
+  <div class="wrap header-inner">
     <a class="brand" href="#top">
-      <img src="./img/icon.svg" alt="gemini-desktop-linux icon" width="27" height="27">
-      <span class="brand-name">gemini-desktop<span class="brand-suffix">-linux</span></span>
-      <span class="tag">Rust + Go</span>
+      <img src="./img/icon.svg" alt="gemini-desktop-linux icon" width="26" height="26">
+      <span>gemini-desktop<span class="brand-suffix">-linux</span></span>
+      <span class="brand-meta">Rust + Go</span>
     </a>
-    <nav aria-label="Primary navigation">
+
+    <nav class="nav-links" aria-label="Primary navigation">
       <a href="#race"><span lang="ko">성능 비교</span><span lang="en">Telemetry</span></a>
-      <a href="#screens"><span lang="ko">실화면</span><span lang="en">Screens</span></a>
+      <a href="#screens"><span lang="ko">실화면</span><span lang="en">Workspace</span></a>
       <a href="#remote"><span lang="ko">원격 · 23 도구</span><span lang="en">Remote · 23 Tools</span></a>
       <a href="#install"><span lang="ko">설치</span><span lang="en">Install</span></a>
     </nav>
-    <div class="spacer"></div>
-    <div class="controls">
-      <button type="button" class="btn icon" id="lang-toggle" aria-label="Switch language">
-        <span lang="ko">EN</span><span lang="en">한</span>
+
+    <div class="header-spacer"></div>
+
+    <div class="header-actions">
+      <button type="button" class="cmd-trigger" id="palette-open" aria-label="Quick jump palette">
+        <span lang="ko">빠른 이동</span><span lang="en">Quick jump</span>
+        <kbd>Ctrl K</kbd>
       </button>
-      <button type="button" class="btn icon" id="theme-toggle" aria-label="Toggle day / night">
-        <svg class="day-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>
-        <svg class="night-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>
-      </button>
-      <a class="btn primary" href="https://github.com/KyongSik-Yoon/gemini-desktop-linux" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+
+      <div class="seg-toggle">
+        <button type="button" id="lang-toggle" aria-label="Switch language">
+          <span lang="ko">EN</span><span lang="en">한</span>
+        </button>
+        <button type="button" id="theme-toggle" aria-label="Toggle day or night theme">
+          <svg class="day-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>
+          <svg class="night-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>
+        </button>
+      </div>
+
+      <a class="btn primary sm" href="https://github.com/KyongSik-Yoon/gemini-desktop-linux" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
     </div>
-    <div class="prog" id="scroll-prog"></div>
   </div>
+  <div class="scroll-prog" id="scroll-prog"></div>
 </header>
 
 <main id="top">
 
-<!-- ═════════ HERO: Living Aurora + Interactive Native Pulse Stage ═════════ -->
-<div class="hero-zone" id="hero-zone">
-  <div class="orbs" aria-hidden="true">
-    <div class="orb o1"></div>
-    <div class="orb o2"></div>
-    <div class="orb o3"></div>
-    <div class="orb o4"></div>
-  </div>
-  <canvas id="bg-field" aria-hidden="true"></canvas>
-
+<!-- ═════════ HERO: Luminous Prism Showcase ═════════ -->
+<section class="hero" id="hero-zone">
   <div class="wrap hero-grid">
-    <div class="lede">
-      <div class="eyebrow">
-        <span class="pulse-dot" aria-hidden="true"></span>
-        <span lang="ko">Rust <code>iced 0.14</code> GUI + Go 1.27 데몬 · Electron 0%</span>
-        <span lang="en">Rust <code>iced 0.14</code> GUI + Go 1.27 Daemon · Zero Electron</span>
+    <div class="hero-copy">
+      <div class="hero-eyebrow">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span lang="ko">Rust iced 0.14 GUI · Go 1.27 데몬 · <span style="white-space:nowrap">Electron 0%</span></span>
+        <span lang="en">Rust iced 0.14 GUI · Go 1.27 Daemon · <span style="white-space:nowrap">Zero Electron</span></span>
       </div>
 
       <h1 class="hero-h1">
-        <span class="line-mask"><span class="line-in"><span lang="ko">답답한 Electron 대신,</span><span lang="en">Leave Heavy Electron.</span></span></span>
-        <span class="line-mask"><span class="line-in"><span class="grad-shimmer"><span lang="ko">가볍고 즉각적인</span><span lang="en">Native, Instant</span></span> <span lang="ko">Linux Gemini</span><span lang="en">Linux Gemini</span></span></span>
+        <span class="line"><span lang="ko">답답한 Electron 대신,</span><span lang="en">Ditch Heavy Electron.</span></span>
+        <span class="line"><span class="prism-text"><span lang="ko">가볍고 즉각적인</span><span lang="en">Native, Instant</span></span></span>
+        <span class="line">Linux Gemini</span>
       </h1>
 
       <p class="hero-sub">
         <span lang="ko">
-          단순 CLI 브리지가 아닙니다. <b>Rust 풀 네이티브 데스크톱 UI(<code>gemini-ui</code>)</b>와
-          <b>Go 양방향 원격 데몬(<code>gemini-remote</code>)</b>으로 채팅·Canvas·예약 작업·23종 MCP·Wayland Computer Use까지 처리합니다.
-          오래 켜 두어도 메모리가 불어나지 않고, 유휴 순간 CPU는 <b>0.0%</b>로 가라앉습니다.
+          단순 CLI 래퍼가 아닙니다. <strong>Rust 풀 네이티브 UI(<code>gemini-ui</code>)</strong>와
+          <strong>Go 양방향 원격 데몬(<code>gemini-remote</code>)</strong>으로 채팅·Canvas·예약 작업·23종 MCP·Wayland Computer Use까지 처리합니다.
+          장시간 켜 두어도 메모리가 평탄하게 유지되고, 유휴 CPU는 <strong>0.0%</strong>로 가라앉습니다.
         </span>
         <span lang="en">
-          Far beyond a CLI bridge. A full <b>Rust native desktop UI (<code>gemini-ui</code>)</b> paired with a
-          <b>Go bidirectional daemon (<code>gemini-remote</code>)</b> handles chat, Canvas, schedules, 23 MCP tools, and Wayland Computer Use — staying flat in RAM with <b>0.0% idle CPU</b> all day.
+          Far beyond a CLI wrapper. A full <strong>Rust native UI (<code>gemini-ui</code>)</strong> paired with a
+          <strong>Go bidirectional daemon (<code>gemini-remote</code>)</strong> handles chat, Canvas, schedules, 23 MCP tools, and Wayland Computer Use — staying flat in RAM with <strong>0.0% idle CPU</strong> all day.
         </span>
       </p>
 
-      <div class="kpi-strip">
-        <div class="kpi-pill ok"><span lang="ko">5시간+ 실측</span><span lang="en">5h+ RSS</span> <b>92 + 24 MB</b></div>
-        <div class="kpi-pill acc"><span lang="ko">유휴 CPU</span><span lang="en">Idle CPU</span> <b>0.0%</b></div>
-        <div class="kpi-pill"><span lang="ko">로컬·MCP·CUA</span><span lang="en">Tools</span> <b>23</b></div>
+      <div class="metric-strip">
+        <div class="metric-item">
+          <span class="metric-val ok">116 MB</span>
+          <span class="metric-lbl"><span lang="ko">5h+ 실측 (92+24)</span><span lang="en">5h+ RSS (92+24)</span></span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-val acc">0.0%</span>
+          <span class="metric-lbl"><span lang="ko">유휴 CPU · 리드로우 0</span><span lang="en">Idle CPU · 0 redraws</span></span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-val">23</span>
+          <span class="metric-lbl"><span lang="ko">로컬 · MCP · CUA</span><span lang="en">Local · MCP · CUA</span></span>
+        </div>
       </div>
 
-      <div class="cta-stack">
+      <div class="hero-actions">
         <div class="cmd-bar">
+          <span class="cmd-prompt">$</span>
           <span class="cmd-txt" id="hero-cmd">git clone https://github.com/KyongSik-Yoon/gemini-desktop-linux.git && cd gemini-desktop-linux && ./install.sh</span>
-          <button type="button" class="copy-chip" data-copy-target="hero-cmd"><span lang="ko">복사</span><span lang="en">Copy</span></button>
+          <button type="button" class="copy-btn" data-copy-target="hero-cmd"><span lang="ko">복사</span><span lang="en">Copy</span></button>
         </div>
-        <div class="cta-btns">
+        <div class="cta-row">
           <a class="btn primary" href="#install"><span lang="ko">원커맨드 설치 보기</span><span lang="en">Quick Install</span></a>
-          <a class="btn" href="#screens"><span lang="ko">다크/라이트 비교 해보기 ↓</span><span lang="en">Try Theme Curtain ↓</span></a>
+          <a class="btn" href="#screens"><span lang="ko">다크/라이트 실화면 비교 ↓</span><span lang="en">Compare Dark &amp; Light ↓</span></a>
         </div>
       </div>
     </div>
 
-    <div class="hero-stage">
-      <div class="stage-card" id="tilt-card">
-        <div class="stage-top">
-          <div class="win-dots">
-            <i></i><i></i><i></i>
-            <span class="win-title" id="stage-win-title">gemini-ui — Chat (Dark · 1860×1230 HiDPI)</span>
+    <div class="stage-wrap">
+      <div class="stage-aura" aria-hidden="true"></div>
+      <div class="stage-frame" id="tilt-card">
+        <div class="stage-bar">
+          <div class="stage-id">
+            <img src="./img/icon.svg" alt="" width="16" height="16">
+            <span class="stage-title" id="stage-win-title">gemini-ui · Chat (Light)</span>
           </div>
-          <div class="stage-mode-pills" role="tablist" aria-label="Live simulation modes">
-            <button type="button" class="mode-pill active" data-sim="idle" role="tab" aria-selected="true">
-              <span lang="ko">유휴 0.0%</span><span lang="en">Idle 0.0%</span>
-            </button>
-            <button type="button" class="mode-pill" data-sim="stream" role="tab" aria-selected="false">
-              <span lang="ko">O(delta) 스트림</span><span lang="en">O(delta) Stream</span>
-            </button>
-            <button type="button" class="mode-pill" data-sim="remote" role="tab" aria-selected="false">
-              <span lang="ko">원격 PC 제어</span><span lang="en">Remote PC</span>
-            </button>
+          <div class="mode-seg" role="tablist" aria-label="Live runtime telemetry modes">
+            <button type="button" class="mode-btn active" data-sim="idle" role="tab" aria-selected="true"><span lang="ko">유휴 0.0%</span><span lang="en">Idle 0.0%</span></button>
+            <button type="button" class="mode-btn" data-sim="stream" role="tab" aria-selected="false"><span lang="ko">O(delta)</span><span lang="en">O(delta)</span></button>
+            <button type="button" class="mode-btn" data-sim="remote" role="tab" aria-selected="false"><span lang="ko">원격 제어</span><span lang="en">Remote</span></button>
           </div>
         </div>
 
-        <div class="stage-viewport" id="hero-shot-open" title="Click to zoom">
-          <img id="hero-shot-img" src="./img/chat-dark.webp" width="1860" height="1230" decoding="async" fetchpriority="high" alt="gemini-ui HiDPI screenshot">
-          <div class="stage-glare"></div>
-          <div class="live-hud" id="live-hud">
-            <div class="hud-left">
-              <span class="hud-dot"></span>
-              <span class="hud-msg" id="hud-msg">IDLE · 0 timers · 0 redraws · Unix socket 0600</span>
-            </div>
-            <span class="hud-stat" id="hud-stat">116 MB · 0.0%</span>
-          </div>
+        <div class="stage-screen" id="hero-shot-open" title="Click to inspect full resolution">
+          <img id="hero-shot-img" src="./img/chat-light.webp" width="1860" height="1230" decoding="async" fetchpriority="high" alt="gemini-ui HiDPI screenshot">
+          <span class="zoom-chip"><span lang="ko">원해상도 ⤢</span><span lang="en">Full-res ⤢</span></span>
         </div>
 
-        <div class="scope-panel">
-          <div class="scope-head">
-            <div class="scope-legend">
-              <span class="lg-n"><i></i><b>gemini-desktop-linux</b> <span id="scope-n-val">0.0% CPU · 116 MB</span></span>
-              <span class="lg-e"><i></i><b>Electron (ref)</b> <span id="scope-e-val">~2.4% CPU · ~690 MB</span></span>
-            </div>
+        <div class="signal-dock" id="signal-dock">
+          <div class="signal-top">
+            <span class="signal-status"><i class="sig-led"></i><span id="hud-msg">유휴 상태 · 상시 타이머 0 · 리드로우 0 · Unix 소켓 0600</span></span>
+            <span class="signal-stat" id="hud-stat">116 MB · 0.0%</span>
           </div>
-          <canvas class="scope-canvas" id="scope-canvas" aria-label="Real-time CPU & memory pulse comparison"></canvas>
+          <div class="scope-legend">
+            <span class="lg-n"><i></i><b>gemini-desktop-linux</b> <span id="scope-n-val">0.0% CPU · 116 MB</span></span>
+            <span class="lg-e"><i></i><b>Electron (ref)</b> <span id="scope-e-val">~2.4% CPU · ~690 MB</span></span>
+          </div>
+          <canvas class="scope-canvas" id="scope-canvas" aria-label="Real-time CPU and memory pulse comparison"></canvas>
         </div>
 
-        <div class="stage-shots-bar">
-          <div class="shot-thumbs">
-            <button type="button" class="shot-pill active" data-shot="0"><span lang="ko">채팅 · 다크</span><span lang="en">Chat · Dark</span></button>
-            <button type="button" class="shot-pill" data-shot="1"><span lang="ko">채팅 · 라이트</span><span lang="en">Chat · Light</span></button>
-            <button type="button" class="shot-pill" data-shot="2"><span lang="ko">예약된 작업</span><span lang="en">Schedules</span></button>
-            <button type="button" class="shot-pill" data-shot="3"><span lang="ko">설정 &amp; 원격</span><span lang="en">Settings</span></button>
-          </div>
+        <div class="shot-strip" role="tablist" aria-label="Application screenshots">
+          <button type="button" class="shot-tab" data-shot="0"><span lang="ko">채팅 · 다크</span><span lang="en">Chat · Dark</span></button>
+          <button type="button" class="shot-tab active" data-shot="1"><span lang="ko">채팅 · 라이트</span><span lang="en">Chat · Light</span></button>
+          <button type="button" class="shot-tab" data-shot="2"><span lang="ko">예약된 작업</span><span lang="en">Schedules</span></button>
+          <button type="button" class="shot-tab" data-shot="3"><span lang="ko">설정 &amp; 원격</span><span lang="en">Settings</span></button>
         </div>
       </div>
-      <p class="stage-footnote">
-        <span lang="ko">위 파형은 동작 원리 시연이며, 화면은 실제 <code>gemini-ui</code> 1860×1230 HiDPI 캡처입니다 (클릭 시 확대).</span>
-        <span lang="en">Live waveform illustrates runtime behavior; screenshots are genuine 1860×1230 HiDPI captures from <code>gemini-ui</code> (click to zoom).</span>
+
+      <p class="footnote">
+        <span lang="ko">하단 파형은 동작 원리 시연이며, 상단 화면은 실제 <code>gemini-ui</code> 1860×1230 HiDPI 캡처입니다 (클릭 시 확대).</span>
+        <span lang="en">Waveform illustrates runtime behavior; screen shows genuine 1860×1230 HiDPI captures from <code>gemini-ui</code> (click to zoom).</span>
       </p>
     </div>
   </div>
-</div>
+</section>
 
-<!-- ═════════ SHEET 2: 24h Resource Race + Measured ps + 6 Invariants ═════════ -->
-<section class="sheet sheet-a" id="race">
+<!-- ═════════ SECTION 01: Telemetry Divergence + Breakdown + 10 Invariants ═════════ -->
+<section class="sec alt" id="race">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="kicker">WHY NATIVE RUST + GO</span>
+      <span class="sec-idx">01 / TELEMETRY &amp; INVARIANTS</span>
       <h2>
         <span lang="ko">시간이 흐를수록 압도적으로 벌어지는 격차</span>
         <span lang="en">Flat All Day While Chromium Clients Swell</span>
       </h2>
       <p>
         <span lang="ko">
-          Electron 클라이언트는 브라우저 엔진과 렌더러를 통째로 품고 돌아가 장시간 켜두면 메모리가 수백 MB~1 GB 이상 불어나고 유휴 중에도 CPU를 깨웁니다.
-          <code>gemini-desktop-linux</code>는 Rust GUI와 Go 데몬에 10가지 정적 성능 불변조건을 박아 넣어 5시간이 지나도 처음과 똑같이 가볍습니다.
+          Electron 앱은 Chromium 렌더러와 V8 힙을 통째로 품고 돌아가 장시간 켜두면 메모리가 수백 MB~1 GB 이상 불어나고 유휴 중에도 CPU를 깨웁니다.
+          <code>gemini-desktop-linux</code>는 10가지 정적 성능 불변조건을 CI로 강제해 5시간이 지나도 첫 1분처럼 가볍습니다.
         </span>
         <span lang="en">
-          Electron apps ship an entire Chromium runtime that steadily inflates in RAM and wakes CPU timers while idle.
-          <code>gemini-desktop-linux</code> enforces 10 static performance invariants across Rust and Go so hour five feels identical to minute one.
+          Electron apps ship an entire Chromium runtime that inflates in RAM and wakes CPU timers while idle.
+          <code>gemini-desktop-linux</code> enforces 10 static performance invariants in CI so hour five feels identical to minute one.
         </span>
       </p>
     </div>
 
-    <div class="race-grid">
-      <div class="card glow rv" style="--i:1">
-        <div class="race-top">
-          <h3><span lang="ko">24시간 연속 구동 타임랩스</span><span lang="en">24-Hour Uptime Timelapse</span></h3>
-          <div class="race-ctrls">
-            <span class="time-badge" id="uptime-label">5h 13m</span>
-            <button type="button" class="btn" id="race-play">
-              <span lang="ko">▶ 재생</span><span lang="en">▶ Replay</span>
-            </button>
+    <div class="tele-grid">
+      <div class="bento rv">
+        <div class="card-head">
+          <h3><span lang="ko">24시간 메모리 발산 곡선</span><span lang="en">24-Hour Memory Divergence</span></h3>
+          <div class="chart-ctrls">
+            <span class="time-readout" id="uptime-label">5h 13m</span>
+            <button type="button" class="btn sm" id="race-play"><span lang="ko">▶ 24h 재생</span><span lang="en">▶ Replay 24h</span></button>
           </div>
         </div>
 
-        <div class="slider-row">
-          <span><span lang="ko">연속 실행</span><span lang="en">Uptime</span></span>
+        <div class="div-readouts">
+          <div class="div-stat native">
+            <span class="lbl"><i></i>Rust + Go</span>
+            <div class="num" id="native-mb-num">116 MB</div>
+            <div class="sub">0.0% idle CPU</div>
+          </div>
+          <div class="div-stat electron">
+            <span class="lbl"><i></i>Electron (ref)</span>
+            <div class="num" id="electron-mb-num">~690 MB</div>
+            <div class="sub" id="electron-cpu-num">~2.4% idle CPU</div>
+          </div>
+          <div class="div-stat ratio">
+            <span class="lbl"><i></i><span lang="ko">메모리 절감</span><span lang="en">RAM Saved</span></span>
+            <div class="num" id="ratio-num">5.9×</div>
+            <div class="sub" id="saved-mb-num">-574 MB</div>
+          </div>
+        </div>
+
+        <div class="chart-box">
+          <svg class="div-svg" viewBox="0 0 560 190" role="img" aria-label="24-hour RAM divergence curve comparing gemini-desktop-linux and Electron">
+            <defs>
+              <linearGradient id="grad-ele" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#f43f5e" stop-opacity="0.34"/>
+                <stop offset="100%" stop-color="#f43f5e" stop-opacity="0.02"/>
+              </linearGradient>
+              <linearGradient id="grad-nat" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.38"/>
+                <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.04"/>
+              </linearGradient>
+            </defs>
+            <!-- Grid lines -->
+            <g stroke="var(--chart-grid)" stroke-width="1">
+              <line x1="44" y1="20" x2="544" y2="20"/>
+              <line x1="44" y1="56" x2="544" y2="56"/>
+              <line x1="44" y1="92" x2="544" y2="92"/>
+              <line x1="44" y1="128" x2="544" y2="128"/>
+              <line x1="44" y1="164" x2="544" y2="164"/>
+            </g>
+            <!-- Y axis labels -->
+            <text x="38" y="24" text-anchor="end">1.6G</text>
+            <text x="38" y="60" text-anchor="end">1.2G</text>
+            <text x="38" y="96" text-anchor="end">800M</text>
+            <text x="38" y="132" text-anchor="end">400M</text>
+            <text x="38" y="168" text-anchor="end">0</text>
+            <!-- X axis labels -->
+            <text x="44" y="183" text-anchor="start">1h</text>
+            <text x="131" y="183" text-anchor="middle">5h 13m</text>
+            <text x="283" y="183" text-anchor="middle">12h</text>
+            <text x="413" y="183" text-anchor="middle">18h</text>
+            <text x="544" y="183" text-anchor="end">24h</text>
+            <!-- Filled areas + strokes populated by JS -->
+            <path id="svg-ele-area" fill="url(#grad-ele)"/>
+            <path id="svg-ele-line" fill="none" stroke="#f43f5e" stroke-width="2.4" stroke-linecap="round"/>
+            <path id="svg-nat-area" fill="url(#grad-nat)"/>
+            <path id="svg-nat-line" fill="none" stroke="#10b981" stroke-width="2.6" stroke-linecap="round"/>
+            <!-- Measured anchor marker at 5h 13m -->
+            <line x1="131" y1="20" x2="131" y2="164" stroke="#10b981" stroke-width="1" stroke-dasharray="3 3" opacity="0.55"/>
+            <circle cx="131" cy="153.6" r="4" fill="#10b981" stroke="#060a16" stroke-width="1.5"/>
+            <!-- Interactive Scrubber -->
+            <line id="svg-cursor" x1="131" y1="16" x2="131" y2="164" stroke="var(--accent)" stroke-width="1.5"/>
+            <circle id="svg-dot-ele" cx="131" cy="102" r="5" fill="#f43f5e" stroke="#ffffff" stroke-width="2"/>
+            <circle id="svg-dot-nat" cx="131" cy="153.6" r="5" fill="#10b981" stroke="#ffffff" stroke-width="2"/>
+          </svg>
+        </div>
+
+        <div class="slider-bar">
+          <span><span lang="ko">연속 실행 시간</span><span lang="en">Continuous uptime</span></span>
           <input type="range" id="uptime-slider" min="1" max="24" value="5" step="1" aria-label="Continuous uptime hours">
-          <span class="mono" style="min-width:34px;text-align:right" id="uptime-hr">5h</span>
-        </div>
-
-        <div class="anchor-pin"><i></i><span lang="ko">5h 13m 실측 고정점: gemini-ui 92 MB + gemini-remote 24 MB = ~116 MB</span><span lang="en">Measured anchor at 5h 13m: gemini-ui 92 MB + gemini-remote 24 MB = ~116 MB</span></div>
-
-        <div class="lanes">
-          <div class="lane native">
-            <div class="lane-meta">
-              <strong>gemini-desktop-linux (Rust + Go)</strong>
-              <span class="val" id="native-ram-txt">~116 MB · 0.0% idle CPU</span>
-            </div>
-            <div class="lane-track"><div class="lane-fill" id="native-ram-bar" style="width:9%"></div></div>
-          </div>
-          <div class="lane electron">
-            <div class="lane-meta">
-              <strong><span lang="ko">일반 Electron 클라이언트 (참고치)</span><span lang="en">Typical Electron Client (reference)</span></strong>
-              <span class="val" id="electron-ram-txt">~690 MB · ~2.4% idle CPU</span>
-            </div>
-            <div class="lane-track"><div class="lane-fill" id="electron-ram-bar" style="width:48%"></div></div>
-          </div>
+          <span class="mono" style="min-width:34px;text-align:right;font-weight:700" id="uptime-hr">5h</span>
         </div>
 
         <pre class="ps-box"><span class="c-dim">$ ps -eo pid,comm,rss,pcpu,etime --sort=-rss | grep gemini-</span>
@@ -1517,256 +1976,316 @@ footer {
 2612874 <span class="c-blue">gemini-remote</span>   <span class="c-ok">24076  0.0</span>    05:13:50</pre>
 
         <p class="sim-note">
-          <span lang="ko">※ 위 <code>ps</code> 결과는 실제 Linux(Wayland/Hyprland) 환경에서 5시간 13분 연속 구동 후 측정한 원본 수치입니다. Electron 수치는 Chromium 다중 프로세스 앱의 전형적 추세를 보여 주는 참고 비교치입니다.</span>
-          <span lang="en">Note: The <code>ps</code> output is a genuine Linux (Wayland/Hyprland) measurement after 5h 13m of continuous uptime. Electron values show typical multi-process Chromium trends for reference.</span>
+          <span lang="ko">※ 위 <code>ps</code> 결과는 실제 Linux(Wayland/Hyprland) 환경에서 5시간 13분 연속 구동 후 측정한 원본 수치입니다. Electron 곡선은 Chromium 다중 프로세스 앱의 전형적 추세 참고치입니다.</span>
+          <span lang="en">Note: The <code>ps</code> log is a genuine Linux (Wayland/Hyprland) capture after 5h 13m uptime. The Electron curve illustrates typical multi-process Chromium growth for reference.</span>
         </p>
       </div>
 
-      <div class="card glow rv" style="--i:2">
-        <h3 style="margin-bottom:14px"><span lang="ko">핵심 항목 비교</span><span lang="en">Head-to-Head Breakdown</span></h3>
-        <div class="table-wrap">
-          <table class="cmp-table">
-            <thead>
-              <tr>
-                <th><span lang="ko">항목</span><span lang="en">Dimension</span></th>
-                <th>Native (Rust+Go)</th>
-                <th>Electron</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><span lang="ko">렌더링</span><span lang="en">UI Runtime</span></td>
-                <td class="good">Rust + iced 0.14 (GPU)</td>
-                <td class="bad">Chromium + V8</td>
-              </tr>
-              <tr>
-                <td><span lang="ko">5시간+ RAM</span><span lang="en">5h+ RAM</span></td>
-                <td class="good">~116 MB (92 + 24)</td>
-                <td class="bad">500 MB – 1.2 GB+</td>
-              </tr>
-              <tr>
-                <td><span lang="ko">유휴 CPU</span><span lang="en">Idle CPU</span></td>
-                <td class="good">0.0% (<span lang="ko">리드로우 0</span><span lang="en">0 redraws</span>)</td>
-                <td class="bad">Timers &amp; GC wakeups</td>
-              </tr>
-              <tr>
-                <td><span lang="ko">스트리밍</span><span lang="en">Streaming</span></td>
-                <td class="good">O(delta) SSE + tail</td>
-                <td class="bad">Full DOM re-render</td>
-              </tr>
-              <tr>
-                <td><span lang="ko">Linux 통합</span><span lang="en">Linux Native</span></td>
-                <td class="good">Wayland · Hyprland · X11</td>
-                <td class="bad">No official Linux build</td>
-              </tr>
-              <tr>
-                <td><span lang="ko">성능 가드</span><span lang="en">Perf Guard</span></td>
-                <td class="good">10 static CI checks</td>
-                <td class="bad">—</td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="bento rv">
+        <div class="card-head">
+          <h3><span lang="ko">핵심 아키텍처 비교</span><span lang="en">Architecture Breakdown</span></h3>
         </div>
-        <div class="cmp-callout">
-          <div>
-            <strong><span lang="ko">~5.9× 낮은 메모리 · 유휴 깨어남 0회</span><span lang="en">~5.9× Lower RAM · Zero Idle Wakeups</span></strong>
-            <span><span lang="ko">모든 성능 불변조건을 정적 스크립트로 회귀 검증</span><span lang="en">Every invariant guarded by static CI checks</span></span>
+        <table class="cmp-table">
+          <thead>
+            <tr>
+              <th><span lang="ko">항목</span><span lang="en">Dimension</span></th>
+              <th>Native (Rust+Go)</th>
+              <th>Electron</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span lang="ko">렌더링</span><span lang="en">UI Runtime</span></td>
+              <td class="good">Rust + iced 0.14 (GPU)</td>
+              <td class="bad">Chromium + V8</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">5시간+ RAM</span><span lang="en">5h+ RAM</span></td>
+              <td class="good">~116 MB (92 + 24)</td>
+              <td class="bad">500 MB – 1.2 GB+</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">유휴 CPU</span><span lang="en">Idle CPU</span></td>
+              <td class="good">0.0% (<span lang="ko">리드로우 0</span><span lang="en">0 redraws</span>)</td>
+              <td class="bad">Timers &amp; GC wakeups</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">스트리밍</span><span lang="en">Streaming</span></td>
+              <td class="good">O(delta) SSE + tail</td>
+              <td class="bad">Full DOM re-render</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">Linux 통합</span><span lang="en">Linux Native</span></td>
+              <td class="good">Wayland · Hyprland · X11</td>
+              <td class="bad">No official Linux build</td>
+            </tr>
+            <tr>
+              <td><span lang="ko">성능 가드</span><span lang="en">Perf Guard</span></td>
+              <td class="good">10 static CI checks</td>
+              <td class="bad">—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="guard-callout">
+          <strong><span lang="ko">~5.9× 낮은 메모리 · 유휴 깨어남 0회</span><span lang="en">~5.9× Lower RAM · Zero Idle Wakeups</span></strong>
+          <p><span lang="ko">모든 Rust/Go 성능 불변조건을 정적 분석과 race 테스트·clippy로 회귀 검증합니다.</span><span lang="en">Every Rust and Go invariant is verified on each commit via static guard, race tests, and clippy.</span></p>
+          <div class="guard-cmd">
+            <span id="guard-cmd-txt">./scripts/perf-guard.sh --full</span>
+            <button type="button" class="copy-btn" data-copy-target="guard-cmd-txt"><span lang="ko">복사</span><span lang="en">Copy</span></button>
           </div>
-          <code>./scripts/perf-guard.sh --full</code>
         </div>
       </div>
     </div>
 
-    <div class="inv-grid">
-      <div class="inv-card glow rv" style="--i:1">
-        <span class="inv-badge">UI-01 · RUST</span>
-        <h3><span lang="ko">유휴 리드로우 0 원칙</span><span lang="en">Zero Idle Redraws</span></h3>
-        <p><span lang="ko">상시 타이머 구독을 금지하고 <code>event::listen_with</code>로 필수 단축키·파일 드롭만 통과시켜 마우스 이동·유휴 시 CPU 0.0%를 지킵니다.</span><span lang="en">No always-on timers; <code>event::listen_with</code> filters only required shortcuts and drops so idle CPU stays at 0.0%.</span></p>
+    <!-- Full 10 Static CI Performance Invariants -->
+    <div class="inv-panel rv">
+      <div class="inv-header">
+        <div class="inv-header-left">
+          <h3><span lang="ko">CI로 강제되는 10가지 정적 성능 불변조건</span><span lang="en">10 Static CI Performance Invariants</span></h3>
+          <p><span lang="ko"><code>scripts/perf-guard.sh</code>가 모든 커밋에서 검증하는 실제 규칙입니다.</span><span lang="en">Enforced automatically across every commit by <code>scripts/perf-guard.sh</code>.</span></p>
+        </div>
+        <div class="filter-seg" role="tablist" aria-label="Filter invariants">
+          <button type="button" class="filter-btn active" data-inv-filter="all" role="tab" aria-selected="true"><span lang="ko">전체 10</span><span lang="en">All 10</span></button>
+          <button type="button" class="filter-btn" data-inv-filter="ui" role="tab" aria-selected="false">Rust UI · 6</button>
+          <button type="button" class="filter-btn" data-inv-filter="go" role="tab" aria-selected="false">Go Daemon · 4</button>
+        </div>
       </div>
-      <div class="inv-card glow rv" style="--i:2">
-        <span class="inv-badge">UI-02 · RUST</span>
-        <h3><span lang="ko">O(delta) 증분 마크다운</span><span lang="en">O(delta) Markdown Tail</span></h3>
-        <p><span lang="ko"><code>ParsedMarkdown::push_delta</code>로 끝 블록만 증분 추가하고 구조 재파싱(80ms)과 자동 스크롤(60ms)을 쓰로틀링합니다.</span><span lang="en">Appends incoming tokens to the tail block via <code>push_delta</code> while throttling structural re-parses (80ms) and autoscroll (60ms).</span></p>
-      </div>
-      <div class="inv-card glow rv" style="--i:3">
-        <span class="inv-badge">UI-03 · RUST</span>
-        <h3><span lang="ko">프레임 할당 억제</span><span lang="en">Zero-Clone Frame Paths</span></h3>
-        <p><span lang="ko"><code>&amp;'a AppTheme</code> 참조 전달, <code>canvas::Cache</code> 지오메트리 캐시, <code>OnceLock</code> 정적 SVG, 인덱스 기반 지연 복사를 강제합니다.</span><span lang="en">Passes <code>&amp;'a AppTheme</code> by reference, caches geometry via <code>canvas::Cache</code>, reuses <code>OnceLock</code> SVGs, and defers copy lookups by index.</span></p>
-      </div>
-      <div class="inv-card glow rv" style="--i:4">
-        <span class="inv-badge go">GO-01 · DAEMON</span>
-        <h3><span lang="ko">커넥션 풀 · 업로더 재사용</span><span lang="en">Shared HTTP &amp; Upload Pools</span></h3>
-        <p><span lang="ko">요청마다 클라이언트를 새로 만들지 않고 <code>robin.Client</code>의 공용 HTTP·이미지·Scotty 업로더 풀을 재사용합니다.</span><span lang="en">Reuses shared HTTP, image, and Scotty uploader pools across handlers instead of spawning per-request clients.</span></p>
-      </div>
-      <div class="inv-card glow rv" style="--i:5">
-        <span class="inv-badge go">GO-02 · DAEMON</span>
-        <h3><span lang="ko">취소 비전염 singleflight</span><span lang="en">Cancel-Safe Singleflight</span></h3>
-        <p><span lang="ko">동시 메타·프로필·라이브러리 조회를 병합하되 한 호출자의 취소가 공용 실행에 전염되지 않게 컨텍스트를 분리합니다.</span><span lang="en">Coalesces duplicate RPCs with isolated execution contexts so one caller canceling never aborts shared inflight work.</span></p>
-      </div>
-      <div class="inv-card glow rv" style="--i:6">
-        <span class="inv-badge go">GO-03 · DAEMON</span>
-        <h3><span lang="ko">O(N) SSE 증분 전송</span><span lang="en">O(N) SSE Prefix Deltas</span></h3>
-        <p><span lang="ko"><code>compactStreamChunk</code>로 누적 본문 재전송(O(N²)) 대신 순수 증분 델타만 <code>0600</code> 권한 Unix 소켓으로 보냅니다.</span><span lang="en">Streams pure prefix deltas over a <code>0600</code> Unix socket via <code>compactStreamChunk</code>, eliminating O(N²) payload resends.</span></p>
+
+      <div class="inv-matrix" id="inv-matrix">
+        <div class="inv-item" data-cat="ui">
+          <span class="inv-code">UI-01 · RUST</span>
+          <h4><span lang="ko">무필터 이벤트 금지</span><span lang="en">Filtered Events Only</span></h4>
+          <p><span lang="ko"><code>event::listen()</code> 대신 <code>listen_with</code>로 필수 입력만 통과시켜 유휴 리드로우 0 유지.</span><span lang="en">Uses <code>event::listen_with</code> so mouse moves never trigger idle redraws.</span></p>
+        </div>
+        <div class="inv-item" data-cat="ui">
+          <span class="inv-code">UI-02 · RUST</span>
+          <h4><span lang="ko">인덱스 지연 복사</span><span lang="en">Index-Deferred Copy</span></h4>
+          <p><span lang="ko"><code>view()</code>에서 원문 문자열 클론을 금지하고 클릭 시점에만 인덱스로 조회.</span><span lang="en">Zero payload cloning in <code>view()</code>; resolves copy strings lazily by index.</span></p>
+        </div>
+        <div class="inv-item" data-cat="ui">
+          <span class="inv-code">UI-03 · RUST</span>
+          <h4><span lang="ko">Canvas 지오메트리 캐시</span><span lang="en">Canvas Cache</span></h4>
+          <p><span lang="ko">모든 <code>canvas::Program</code>이 <code>self.cache.draw()</code>로 벡터 지오메트리를 재사용.</span><span lang="en">Every <code>canvas::Program</code> reuses cached geometry via <code>self.cache.draw()</code>.</span></p>
+        </div>
+        <div class="inv-item" data-cat="ui">
+          <span class="inv-code">UI-04 · RUST</span>
+          <h4><span lang="ko">정적 SVG OnceLock</span><span lang="en">OnceLock SVG Cache</span></h4>
+          <p><span lang="ko">아이콘 핸들을 <code>OnceLock</code>으로 1회 생성해 프레임당 재파싱 차단.</span><span lang="en">Creates static SVG handles once via <code>OnceLock</code> without per-frame allocations.</span></p>
+        </div>
+        <div class="inv-item" data-cat="ui">
+          <span class="inv-code">UI-05 · RUST</span>
+          <h4><span lang="ko">테마 참조 전달</span><span lang="en">Borrowed Theme</span></h4>
+          <p><span lang="ko">마크다운 뷰에 <code>&amp;'a AppTheme</code> 참조만 전달해 구조체 복사를 제거.</span><span lang="en">Passes <code>&amp;'a AppTheme</code> by reference across markdown rendering paths.</span></p>
+        </div>
+        <div class="inv-item" data-cat="ui">
+          <span class="inv-code">UI-06 · RUST</span>
+          <h4><span lang="ko">팔레트 클론 금지</span><span lang="en">Zero Palette Clones</span></h4>
+          <p><span lang="ko">렌더 경로 내 <code>self.palette.clone()</code> 프레임 할당을 정적 차단.</span><span lang="en">Statically forbids <code>self.palette.clone()</code> allocations in UI render loops.</span></p>
+        </div>
+        <div class="inv-item" data-cat="go">
+          <span class="inv-code go">GO-01 · DAEMON</span>
+          <h4><span lang="ko">HTTP 커넥션 풀 공유</span><span lang="en">Shared HTTP Pools</span></h4>
+          <p><span lang="ko">요청별 임시 <code>&amp;http.Client{}</code> 생성을 막고 <code>robin.Client</code> 풀을 재사용.</span><span lang="en">Reuses shared <code>robin.Client</code> HTTP pools instead of per-request clients.</span></p>
+        </div>
+        <div class="inv-item" data-cat="go">
+          <span class="inv-code go">GO-02 · DAEMON</span>
+          <h4><span lang="ko">Scotty 업로더 재사용</span><span lang="en">Shared Uploader</span></h4>
+          <p><span lang="ko">파일 업로드 시 공용 <code>getUploader()</code>로 최대 4 워커 병렬 전송.</span><span lang="en">Reuses shared <code>getUploader()</code> with bounded 4-worker parallel uploads.</span></p>
+        </div>
+        <div class="inv-item" data-cat="go">
+          <span class="inv-code go">GO-03 · DAEMON</span>
+          <h4><span lang="ko">O(N) SSE 증분 델타</span><span lang="en">O(N) SSE Deltas</span></h4>
+          <p><span lang="ko"><code>compactStreamChunk</code>로 누적 재전송 없이 순수 접두사 델타만 스트리밍.</span><span lang="en">Streams pure prefix deltas via <code>compactStreamChunk</code> over <code>0600</code> Unix socket.</span></p>
+        </div>
+        <div class="inv-item" data-cat="go">
+          <span class="inv-code go">GO-04 · DAEMON</span>
+          <h4><span lang="ko">와이어 덤프 보안 가드</span><span lang="en">Wire Dump Guard</span></h4>
+          <p><span lang="ko">원시 프로토콜 <code>hex=%x</code> 로그는 <code>GEMINI_DEBUG_WIRE=1</code> 뒤로 격리.</span><span lang="en">Gates raw <code>hex=%x</code> wire dumps strictly behind <code>GEMINI_DEBUG_WIRE=1</code>.</span></p>
+        </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═════════ SHEET 3: Interactive Theme Curtain & Real HiDPI Splits ═════════ -->
-<section class="sheet sheet-b" id="screens">
+<!-- ═════════ SECTION 02: Real HiDPI Workspace ═════════ -->
+<section class="sec" id="screens">
   <div class="wrap">
     <div class="sec-head center rv">
-      <span class="kicker">REAL HIDPI WORKSPACE</span>
+      <span class="sec-idx">02 / REAL HIDPI WORKSPACE</span>
       <h2>
-        <span lang="ko">직접 밀어 보는 다크 · 라이트 실화면</span>
+        <span lang="ko">직접 밀어 보는 다크 · 라이트 네이티브 실화면</span>
         <span lang="en">Slide Across Real Dark &amp; Light HiDPI Captures</span>
       </h2>
       <p>
-        <span lang="ko">모든 화면은 실제 <code>gemini-ui</code> 릴리즈 바이너리를 Wayland HiDPI(1860×1230)에서 캡처했습니다. 가운데 핸들을 좌우로 밀거나 이미지를 클릭해 원해상도로 확인해 보세요.</span>
-        <span lang="en">Every screen is captured directly from the release <code>gemini-ui</code> binary on Wayland at 1860×1230 HiDPI. Drag the curtain below or click any screen to inspect full resolution.</span>
+        <span lang="ko">모든 화면은 실제 <code>gemini-ui</code> 릴리즈 바이너리를 Wayland HiDPI(1860×1230)에서 캡처했습니다. 커튼을 드래그하거나 이미지를 클릭해 원해상도로 확인해 보세요.</span>
+        <span lang="en">Every screenshot is captured directly from the release <code>gemini-ui</code> binary on Wayland at 1860×1230 HiDPI. Drag the curtain or click any screen for full resolution.</span>
       </p>
     </div>
 
-    <div class="split-stack">
-      <!-- Split 1: Interactive Before/After Theme Curtain -->
-      <div class="split rv">
-        <div class="split-text">
-          <span class="kicker">CHAT · CANVAS · LIVE THEME</span>
-          <h3><span lang="ko">GFM 표, 코드 구문 강조, Canvas까지 네이티브 GPU 렌더</span><span lang="en">Native GPU Rendering for Tables, Code &amp; Canvas</span></h3>
-          <p><span lang="ko">시스템 및 Omarchy 테마를 실시간 파일 감시 스트림으로 자동 추종하고, 설정에서도 다크·라이트를 즉시 전환합니다.</span><span lang="en">Follows system and Omarchy themes live via background file watchers, with instant manual toggle inside Settings.</span></p>
-          <ul class="bullet-list">
-            <li><span class="num">01</span><div><b><span lang="ko">지연 복사 &amp; 구문 강조 코드블록</span><span lang="en">Zero-clone copy &amp; syntax highlighting</span></b><span><span lang="ko">표·코드·Canvas 원문을 뷰에 복제하지 않고 클릭 시점에만 인덱스로 복사합니다.</span><span lang="en">Tables, code blocks, and Canvas cards resolve copy payloads lazily by index.</span></span></div></li>
-            <li><span class="num">02</span><div><b><span lang="ko">올인원 8개 워크스페이스 섹션</span><span lang="en">All 8 Workspace Sections</span></b><span><span lang="ko">채팅, 라이브러리(지연 로드), 이미지·동영상 스튜디오, 노트북, 학생 학습, Gems, 맞춤설정을 모두 담았습니다.</span><span lang="en">Chat, lazy-loaded Library, Image/Video Studio, Notebooks, Student, Gems, and Personalize in one binary.</span></span></div></li>
-          </ul>
+    <!-- Interactive Dark/Light Theme Curtain -->
+    <div class="bento curtain-bento rv">
+      <div class="story-copy">
+        <span class="sec-idx">CHAT · CANVAS · LIVE THEME</span>
+        <h3><span lang="ko">GFM 표, 구문 강조 코드, Canvas까지 네이티브 GPU 렌더</span><span lang="en">Native GPU Rendering for Tables, Code &amp; Canvas</span></h3>
+        <p><span lang="ko">시스템 및 Omarchy 테마를 백그라운드 파일 감시 스트림으로 자동 추종하고, 설정 모달에서도 다크·라이트를 즉시 전환합니다.</span><span lang="en">Tracks system and Omarchy themes live via a background file watcher, with instant manual toggle inside Settings.</span></p>
+        <ul class="feature-points">
+          <li>
+            <span class="pt-num">01</span>
+            <div>
+              <b><span lang="ko">O(delta) 스트리밍 &amp; 지연 복사</span><span lang="en">O(delta) Streaming &amp; Lazy Copy</span></b>
+              <span><span lang="ko"><code>push_delta</code>로 끝 블록만 증분 추가하고 표·코드·Canvas 복사는 클릭 시점에 인덱스로 조회합니다.</span><span lang="en">Appends incoming tokens to the tail block via <code>push_delta</code> and resolves copies lazily by index.</span></span>
+            </div>
+          </li>
+          <li>
+            <span class="pt-num">02</span>
+            <div>
+              <b><span lang="ko">올인원 8개 워크스페이스 섹션</span><span lang="en">All 8 Workspace Sections</span></b>
+              <span><span lang="ko">채팅, 라이브러리(지연 로드), 이미지·동영상 스튜디오, 노트북, 학생 학습, Gems, 맞춤설정을 한 바이너리에 담았습니다.</span><span lang="en">Chat, lazy-loaded Library, Image/Video Studio, Notebooks, Student, Gems, and Personalize in one binary.</span></span>
+            </div>
+          </li>
+        </ul>
+        <div class="curtain-snaps" aria-label="Quick curtain positions">
+          <button type="button" class="snap-btn" data-curtain-snap="94">Dark</button>
+          <button type="button" class="snap-btn" data-curtain-snap="50">50 / 50</button>
+          <button type="button" class="snap-btn" data-curtain-snap="6">Light</button>
+          <button type="button" class="snap-btn" data-open-lb="0"><span lang="ko">원해상도 ⤢</span><span lang="en">Full-res ⤢</span></button>
         </div>
+      </div>
 
-        <div class="curtain-wrap">
-          <div class="curtain" id="theme-curtain" role="slider" tabindex="0" aria-label="Compare dark and light theme screenshots" aria-valuemin="5" aria-valuemax="95" aria-valuenow="50">
-            <img src="./img/chat-dark.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui dark theme chat">
-            <img class="layer-light" src="./img/chat-light.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui light theme chat">
-            <span class="curtain-tag left">Dark Theme</span>
-            <span class="curtain-tag right">Light Theme</span>
-            <div class="divider"></div>
-            <div class="knob" aria-hidden="true">⇄</div>
-          </div>
-          <div class="curtain-hint">
-            <span><span lang="ko">← 좌우로 드래그해 다크/라이트 비교 →</span><span lang="en">← Drag horizontally to compare Dark &amp; Light →</span></span>
-            <button type="button" class="shot-pill" data-open-lb="0"><span lang="ko">원해상도 확대 ↗</span><span lang="en">Inspect Full-Res ↗</span></button>
+      <div class="curtain-box">
+        <div class="curtain" id="theme-curtain" role="slider" tabindex="0" aria-label="Compare dark and light theme screenshots" aria-valuemin="6" aria-valuemax="94" aria-valuenow="50">
+          <img src="./img/chat-dark.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui dark theme chat">
+          <img class="layer-light" src="./img/chat-light.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui light theme chat">
+          <span class="curtain-badge left">Dark Theme</span>
+          <span class="curtain-badge right">Light Theme</span>
+          <div class="divider"></div>
+          <div class="knob" aria-hidden="true">⇄</div>
+        </div>
+        <div class="curtain-foot">
+          <span><span lang="ko">← 좌우로 드래그하거나 방향키로 다크/라이트 비교 →</span><span lang="en">← Drag or use arrow keys to compare Dark &amp; Light →</span></span>
+          <span class="mono">1860×1230 HiDPI</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dual Feature Cards: Schedules & Settings -->
+    <div class="dual-screens">
+      <div class="bento screen-card rv">
+        <div class="screen-shot" data-open-lb="2">
+          <img src="./img/schedules.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui scheduled actions screen">
+          <span class="zoom-chip"><span lang="ko">확대 ⤢</span><span lang="en">Zoom ⤢</span></span>
+        </div>
+        <div class="screen-copy">
+          <h3><span lang="ko">예약된 작업 &amp; 키보드 중심 워크플로우</span><span lang="en">Scheduled Actions &amp; Keyboard-First Flow</span></h3>
+          <p><span lang="ko">클라우드·로컬·추천 예약을 한 화면에서 관리하고 완료 시 <code>notify-send</code> 알림을 띄웁니다. 통합 검색으로 과거 대화의 정확한 턴으로 바로 점프합니다.</span><span lang="en">Manage cloud, local, and recommended schedules with <code>notify-send</code> desktop alerts, plus full-text search that jumps straight to matching turns.</span></p>
+          <div class="kbd-grid">
+            <span class="kbd-item"><kbd>Ctrl+K</kbd><span lang="ko">검색 · 턴 점프</span><span lang="en">Search &amp; jump</span></span>
+            <span class="kbd-item"><kbd>Ctrl+N</kbd><span lang="ko">새 대화</span><span lang="en">New chat</span></span>
+            <span class="kbd-item"><kbd>Ctrl+B</kbd><span lang="ko">사이드바</span><span lang="en">Sidebar</span></span>
+            <span class="kbd-item"><kbd>Ctrl+,</kbd><span lang="ko">설정</span><span lang="en">Settings</span></span>
           </div>
         </div>
       </div>
 
-      <!-- Split 2: Schedules + Keyboard Shortcuts -->
-      <div class="split flip rv">
-        <div class="split-text">
-          <span class="kicker">SCHEDULES · SEARCH · SHORTCUTS</span>
-          <h3><span lang="ko">예약된 작업과 키보드 중심 워크플로우</span><span lang="en">Scheduled Actions &amp; Keyboard-First Navigation</span></h3>
-          <p><span lang="ko">클라우드·로컬·추천 예약을 한 화면에서 관리하고 완료 시 <code>notify-send</code>로 데스크톱 알림을 띄웁니다. 통합 검색으로 과거 대화 본문의 정확한 턴으로 바로 점프합니다.</span><span lang="en">Manage cloud, local, and recommended schedules with desktop <code>notify-send</code> alerts, plus full-text search that jumps directly to matching turns.</span></p>
-          <div class="keys">
-            <span><kbd>Ctrl+K</kbd> <span lang="ko">통합 검색 · 턴 점프</span><span lang="en">Search &amp; turn jump</span></span>
-            <span><kbd>Ctrl+N</kbd> <span lang="ko">새 대화</span><span lang="en">New chat</span></span>
-            <span><kbd>Ctrl+B</kbd> <span lang="ko">사이드바</span><span lang="en">Sidebar</span></span>
-            <span><kbd>Ctrl+,</kbd> <span lang="ko">설정</span><span lang="en">Settings</span></span>
+      <div class="bento screen-card rv">
+        <div class="screen-shot" data-open-lb="3">
+          <img src="./img/settings.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui settings and remote control modal">
+          <span class="zoom-chip"><span lang="ko">확대 ⤢</span><span lang="en">Zoom ⤢</span></span>
+        </div>
+        <div class="screen-copy">
+          <h3><span lang="ko">사용 한도 게이지 · 23종 원격 권한 관리</span><span lang="en">Usage Gauges &amp; Scoped Remote Permissions</span></h3>
+          <p><span lang="ko">Pro Thinking·Deep Research 한도 게이지, 한/영 실시간 전환, Punctual 스트림 상태, 허용 폴더 화이트리스트와 외부 MCP 서버를 설정 모달에서 바로 제어합니다.</span><span lang="en">Monitor live usage gauges, switch Korean/English on the fly, check Punctual stream health, and scope allowed folders and MCP servers directly in Settings.</span></p>
+          <div class="tag-list">
+            <span class="mini-tag">allowed_folders</span>
+            <span class="mini-tag">PipeWire voice</span>
+            <span class="mini-tag">xdg-desktop-portal</span>
+            <span class="mini-tag">slurp + grim</span>
           </div>
-        </div>
-        <div class="shot-frame" data-open-lb="2">
-          <img src="./img/schedules.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui scheduled actions">
-        </div>
-      </div>
-
-      <!-- Split 3: Settings & Remote Control -->
-      <div class="split rv">
-        <div class="split-text">
-          <span class="kicker">SETTINGS · REMOTE PC CONTROL</span>
-          <h3><span lang="ko">사용 한도 게이지부터 23개 원격 도구 권한까지 한눈에</span><span lang="en">Usage Gauges, Locale &amp; Scoped Remote Control</span></h3>
-          <p><span lang="ko">Pro Thinking·Deep Research 한도 게이지, 한국어/English 실시간 전환, Punctual 스트림 상태, 허용 폴더 화이트리스트와 MCP 서버 연결을 설정 모달에서 바로 제어합니다.</span><span lang="en">Inspect live usage limit gauges, switch Korean/English on the fly, monitor Punctual stream health, and scope allowed folders &amp; MCP servers directly in Settings.</span></p>
-          <ul class="bullet-list">
-            <li><span class="num">01</span><div><b><span lang="ko">허용 폴더 화이트리스트</span><span lang="en">Explicit Folder Sandbox</span></b><span><span lang="ko">원격 파일 읽기·편집·검색은 등록된 워크스페이스 폴더 안에서만 허용됩니다.</span><span lang="en">Remote file read, edit, and grep operations stay strictly inside registered directories.</span></span></div></li>
-            <li><span class="num">02</span><div><b><span lang="ko">Linux 데스크톱 네이티브 연동</span><span lang="en">Native Linux Integrations</span></b><span><span lang="ko">PipeWire 음성 녹음, <code>xdg-desktop-portal</code> 파일 선택기, <code>slurp+grim</code> 화면 캡처를 지원합니다.</span><span lang="en">Integrates PipeWire voice capture, <code>xdg-desktop-portal</code> file dialogs, and <code>slurp+grim</code> screen capture.</span></span></div></li>
-          </ul>
-        </div>
-        <div class="shot-frame" data-open-lb="3">
-          <img src="./img/settings.webp" width="1860" height="1230" loading="lazy" decoding="async" alt="gemini-ui settings and remote pc control">
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═════════ SHEET 4: Cosmos Animated Architecture & 23-Tool Console ═════════ -->
-<section class="sheet sheet-c" id="remote">
+<!-- ═════════ SECTION 03: Live Pipeline & 23-Tool Console ═════════ -->
+<section class="sec alt" id="remote">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="kicker">ARCHITECTURE · 23 LOCAL / MCP / CUA TOOLS</span>
+      <span class="sec-idx">03 / BIDIRECTIONAL PIPELINE &amp; 23 TOOLS</span>
       <h2>
         <span lang="ko">모바일에서 Linux 워크스테이션까지, 살아 있는 양방향 파이프라인</span>
         <span lang="en">One Bidirectional Pipeline from Phone to Wayland Desktop</span>
       </h2>
       <p>
-        <span lang="ko"><code>gemini-ui</code>는 <code>0600</code> Unix 소켓으로 Go 데몬과 대화하고, <code>gemini-remote</code>는 모바일·웹·데스크톱 어디서 보낸 작업이든 허용 폴더와 23종 도구로 안전하게 실행합니다. 아래 카테고리 카드를 눌러 실제 도구 호출 흐름을 확인해 보세요.</span>
-        <span lang="en"><code>gemini-ui</code> communicates over a <code>0600</code> Unix socket while <code>gemini-remote</code> bridges Gemini Mobile, Web, and Linux with 23 scoped local, MCP, and Computer Use tools. Click any category below to preview a live tool dispatch.</span>
+        <span lang="ko"><code>gemini-ui</code>는 <code>0600</code> Unix 소켓으로 Go 데몬과 통신하고, <code>gemini-remote</code>는 모바일·웹·데스크톱 어디서 보낸 작업이든 허용 폴더와 23종 도구로 안전하게 실행합니다. 아래 카테고리를 눌러 실제 도구 디스패치를 확인해 보세요.</span>
+        <span lang="en"><code>gemini-ui</code> speaks to the Go daemon over a <code>0600</code> Unix socket while <code>gemini-remote</code> bridges Gemini Mobile, Web, and Linux with 23 scoped local, MCP, and Computer Use tools. Click any category below to preview live dispatch.</span>
       </p>
     </div>
 
-    <div class="arch-stage rv">
-      <div class="arch-flow">
-        <div class="arch-node" id="node-ui">
-          <div class="role">RUST · ICED 0.14</div>
+    <div class="pipe-stage rv">
+      <div class="pipe-flow">
+        <div class="pipe-node" id="node-ui">
+          <div class="pipe-role">RUST · ICED 0.14</div>
           <h3>gemini-ui</h3>
           <p><span lang="ko">92 MB RSS · 유휴 0.0% · O(delta) 마크다운 · Canvas · 8개 섹션</span><span lang="en">92 MB RSS · 0.0% idle · O(delta) Markdown · Canvas · 8 sections</span></p>
         </div>
-        <div class="wire">
-          <div class="wire-line"><span class="wire-pkt"></span><span class="wire-pkt rev"></span></div>
-          <span class="wire-label">Unix 0600 · SSE</span>
+
+        <div class="pipe-wire" aria-hidden="true">
+          <div class="wire-track"><span class="wire-pkt"></span><span class="wire-pkt rev"></span></div>
+          <span class="wire-lbl">Unix 0600 · SSE</span>
         </div>
-        <div class="arch-node daemon" id="node-daemon">
-          <div class="role">GO 1.27 DAEMON</div>
+
+        <div class="pipe-node daemon" id="node-daemon">
+          <div class="pipe-role">GO 1.27 DAEMON</div>
           <h3>gemini-remote</h3>
           <p><span lang="ko">24 MB RSS · singleflight · 23종 로컬/MCP · Wayland/X11 CUA</span><span lang="en">24 MB RSS · singleflight · 23 local/MCP · Wayland/X11 CUA</span></p>
         </div>
-        <div class="wire">
-          <div class="wire-line"><span class="wire-pkt"></span><span class="wire-pkt rev"></span></div>
-          <span class="wire-label">HTTPS · Stream</span>
+
+        <div class="pipe-wire" aria-hidden="true">
+          <div class="wire-track"><span class="wire-pkt"></span><span class="wire-pkt rev"></span></div>
+          <span class="wire-lbl">HTTPS · Punctual</span>
         </div>
-        <div class="arch-node cloud" id="node-cloud">
-          <div class="role">MULTI-DEVICE</div>
+
+        <div class="pipe-node cloud" id="node-cloud">
+          <div class="pipe-role">MULTI-DEVICE</div>
           <h3>Gemini Mobile · Web</h3>
           <p><span lang="ko">외출 중 폰에서 Linux 빌드·Git·화면 제어 지시 및 대화 동기화</span><span lang="en">Trigger Linux builds, Git ops, and GUI actions from phone or web</span></p>
         </div>
       </div>
     </div>
 
-    <div class="tool-explorer rv">
+    <div class="tool-grid rv">
       <div class="tool-tabs" role="tablist" aria-label="Tool categories">
         <button type="button" class="tool-tab active" data-tool="shell" role="tab" aria-selected="true">
           <h4><span lang="ko">셸 &amp; 코드 실행</span><span lang="en">Shell &amp; Code Execution</span></h4>
           <p><span lang="ko">장기 백그라운드 명령 상태 추적, stdin 전달, Python 즉시 실행</span><span lang="en">Background command tracking, interactive stdin, and Python execution</span></p>
-          <div class="chips"><span class="chip">run_command</span><span class="chip">command_status</span><span class="chip">send_command_input</span><span class="chip">run_python</span></div>
+          <div class="tool-chips"><span class="tool-chip">run_command</span><span class="tool-chip">command_status</span><span class="tool-chip">send_command_input</span><span class="tool-chip">run_python</span></div>
         </button>
 
         <button type="button" class="tool-tab" data-tool="fs" role="tab" aria-selected="false">
           <h4><span lang="ko">허용 폴더 파일시스템</span><span lang="en">Scoped Filesystem</span></h4>
           <p><span lang="ko">등록된 폴더 범위 안에서만 읽기·쓰기·부분 치환·패턴 검색</span><span lang="en">Read, edit, chunked patch, and grep strictly inside allowed folders</span></p>
-          <div class="chips"><span class="chip">read_file</span><span class="chip">write_file</span><span class="chip">replace_file_content</span><span class="chip">grep_search</span></div>
+          <div class="tool-chips"><span class="tool-chip">read_file</span><span class="tool-chip">write_file</span><span class="tool-chip">replace_file_content</span><span class="tool-chip">grep_search</span></div>
         </button>
 
         <button type="button" class="tool-tab" data-tool="mcp" role="tab" aria-selected="false">
           <h4><span lang="ko">스킬 &amp; 23종 MCP 브리지</span><span lang="en">Skills &amp; MCP Bridge</span></h4>
           <p><span lang="ko">내장 Git(checkout·commit)·Obsidian 및 외부 stdio MCP 서버</span><span lang="en">Built-in Git (checkout/commit), Obsidian vault, and stdio MCP servers</span></p>
-          <div class="chips"><span class="chip">list_skills</span><span class="chip">ReadSkill</span><span class="chip">list_mcp</span><span class="chip">execute_mcp</span></div>
+          <div class="tool-chips"><span class="tool-chip">list_skills</span><span class="tool-chip">ReadSkill</span><span class="tool-chip">list_mcp</span><span class="tool-chip">execute_mcp</span></div>
         </button>
 
         <button type="button" class="tool-tab" data-tool="cua" role="tab" aria-selected="false">
           <h4><span lang="ko">Wayland / Hyprland &amp; X11 CUA</span><span lang="en">Wayland / Hyprland &amp; X11 CUA</span></h4>
-          <p><span lang="ko">순수 Python <code>zwlr_virtual_pointer_manager_v1</code> 가상 포인터 + AT-SPI2</span><span lang="en">Pure-Python <code>zwlr_virtual_pointer_manager_v1</code> pointer + AT-SPI2</span></p>
-          <div class="chips"><span class="chip">ui_control</span><span class="chip">wlr-virtual-pointer</span><span class="chip">AT-SPI2</span><span class="chip">hyprctl / grim</span></div>
+          <p><span lang="ko">순수 Python <code>zwlr_virtual_pointer_manager_v1</code> 포인터 + AT-SPI2</span><span lang="en">Pure-Python <code>zwlr_virtual_pointer_manager_v1</code> pointer + AT-SPI2</span></p>
+          <div class="tool-chips"><span class="tool-chip">ui_control</span><span class="tool-chip">wlr-virtual-pointer</span><span class="tool-chip">AT-SPI2</span><span class="tool-chip">hyprctl / grim</span></div>
         </button>
       </div>
 
-      <div class="tool-console">
-        <div class="console-bar">
-          <span id="console-title">gemini-remote :: live tool dispatch</span>
-          <span style="color:#4ade80">● 23 tools ready</span>
+      <div class="console-card">
+        <div class="console-top">
+          <span id="console-title">gemini-remote :: run_command (background tracked)</span>
+          <span class="console-ready">● 23 tools ready</span>
         </div>
         <div class="console-body" id="console-body"></div>
       </div>
@@ -1774,30 +2293,33 @@ footer {
   </div>
 </section>
 
-<!-- ═════════ SHEET 5: Quick Start & Footer ═════════ -->
-<section class="sheet sheet-d last" id="install">
+<!-- ═════════ SECTION 04: Quick Start & Footer ═════════ -->
+<section class="sec last" id="install">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="kicker">QUICK START</span>
+      <span class="sec-idx">04 / QUICK START</span>
       <h2>
         <span lang="ko">원커맨드 빌드 · 설치 및 시작하기</span>
         <span lang="en">One-Command Build, Install &amp; Launch</span>
       </h2>
       <p>
         <span lang="ko"><code>./install.sh</code> 한 번으로 <code>gemini-remote</code>(Go)와 <code>gemini-ui</code>(Rust release)를 빌드해 <code>~/.local/bin/</code>, 앱 런처(<code>.desktop</code>), 아이콘, <code>systemd</code> 사용자 서비스까지 자동 등록합니다.</span>
-        <span lang="en"><code>./install.sh</code> builds both release binaries, installs them to <code>~/.local/bin/</code>, and sets up the desktop entry, icon, and systemd user service.</span>
+        <span lang="en"><code>./install.sh</code> builds both release binaries, installs them to <code>~/.local/bin/</code>, and registers the desktop entry, icon, and systemd user service.</span>
       </p>
     </div>
 
     <div class="install-grid rv">
-      <div class="code-card">
-        <div class="code-head">
-          <span>bash — install &amp; setup</span>
-          <button type="button" class="copy-chip" data-copy-target="install-snippet">
-            <span lang="ko">복사</span><span lang="en">Copy</span>
-          </button>
+      <div class="term-card">
+        <div class="term-bar">
+          <div class="term-tabs" role="tablist" aria-label="Install steps">
+            <button type="button" class="term-tab active" data-term="all" role="tab" aria-selected="true"><span lang="ko">전체 설치</span><span lang="en">Full Setup</span></button>
+            <button type="button" class="term-tab" data-term="build" role="tab" aria-selected="false"><span lang="ko">1. 빌드</span><span lang="en">1. Build</span></button>
+            <button type="button" class="term-tab" data-term="oauth" role="tab" aria-selected="false"><span lang="ko">2. OAuth &amp; 데몬</span><span lang="en">2. OAuth &amp; Daemon</span></button>
+          </div>
+          <button type="button" class="copy-btn" id="term-copy-btn"><span lang="ko">복사</span><span lang="en">Copy</span></button>
         </div>
-        <pre id="install-snippet"><code><span class="c-cm"># 1. Clone &amp; build both Go daemon + Rust GUI</span>
+
+        <pre data-term-panel="all"><code><span class="c-cm"># 1. Clone &amp; build both Go daemon + Rust GUI</span>
 <span class="c-cmd">git clone</span> https://github.com/KyongSik-Yoon/gemini-desktop-linux.git
 <span class="c-cmd">cd</span> gemini-desktop-linux
 <span class="c-cmd">./install.sh</span>
@@ -1813,9 +2335,27 @@ footer {
 
 <span class="c-cm"># 4. Launch native Linux Gemini Desktop</span>
 <span class="c-cmd">gemini-ui</span></code></pre>
+
+        <pre data-term-panel="build" hidden><code><span class="c-cm"># Build Go daemon + Rust release binary &amp; install systemd unit</span>
+<span class="c-cmd">git clone</span> https://github.com/KyongSik-Yoon/gemini-desktop-linux.git
+<span class="c-cmd">cd</span> gemini-desktop-linux
+<span class="c-cmd">./install.sh</span>
+
+<span class="c-cm"># Run all 10 static perf guards + go test -race + cargo clippy</span>
+<span class="c-cmd">./scripts/perf-guard.sh</span> --full</code></pre>
+
+        <pre data-term-panel="oauth" hidden><code><span class="c-cm"># Extract OAuth client keys &amp; authenticate</span>
+<span class="c-cmd">gemini-remote</span> extract-keys /path/to/Gemini.app
+<span class="c-cmd">gemini-remote</span> login
+
+<span class="c-cm"># Whitelist folders &amp; register this Linux workstation</span>
+<span class="c-cmd">gemini-remote</span> folders add ~/dev/git-repo
+<span class="c-cmd">gemini-remote</span> register
+<span class="c-cmd">gemini-remote</span> service install
+<span class="c-cmd">gemini-ui</span></code></pre>
       </div>
 
-      <div class="card">
+      <div class="bento">
         <h3><span lang="ko">요구 사항 &amp; 검증</span><span lang="en">Requirements &amp; Verification</span></h3>
         <ul class="req-list">
           <li><b>OS:</b> Ubuntu, Arch / Omarchy, Fedora (Wayland / Hyprland &amp; X11)</li>
@@ -1860,20 +2400,28 @@ footer {
   <div class="lb-cap" id="lb-cap"></div>
 </div>
 
+<!-- Quick Jump Palette (Ctrl+K / ⌘K) -->
+<div class="palette-backdrop" id="palette" hidden role="dialog" aria-modal="true" aria-label="Quick command palette">
+  <div class="palette-modal">
+    <div class="palette-head">
+      <span class="mono" style="color:var(--accent);font-weight:700">⌘</span>
+      <input type="text" id="palette-input" autocomplete="off" spellcheck="false" placeholder="Jump to section, screenshot, or action...">
+      <kbd>ESC</kbd>
+    </div>
+    <div class="palette-list" id="palette-list"></div>
+  </div>
+</div>
+
 <script>
 (function () {
   "use strict";
 
   var REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var isKo = function () { return document.documentElement.dataset.lang === "ko"; };
 
-  // Trigger hero headline reveal
-  requestAnimationFrame(function () {
-    document.getElementById("hero-zone").classList.add("on");
-  });
-
-  // Scroll progress bar + active nav (cached layout metrics + rAF throttle, zero forced layout during scroll)
+  // Scroll progress bar & active navigation (cached layout metrics + rAF throttle, zero forced layout during scroll)
   var progEl = document.getElementById("scroll-prog");
-  var navLinks = Array.prototype.slice.call(document.querySelectorAll(".top nav a[href^='#']"));
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll(".nav-links a[href^='#']"));
   var navSections = navLinks.map(function (a) { return document.querySelector(a.getAttribute("href")); }).filter(Boolean);
   var docScrollMax = 0;
   var sectionTops = [];
@@ -1882,12 +2430,9 @@ footer {
 
   function measureScrollMetrics() {
     docScrollMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    sectionTops = navSections.map(function (sec) {
-      return { id: "#" + sec.id, top: sec.offsetTop };
-    });
+    sectionTops = navSections.map(function (sec) { return { id: "#" + sec.id, top: sec.offsetTop }; });
     paintScrollState();
   }
-
   function paintScrollState() {
     scrollRaf = 0;
     var sy = window.scrollY;
@@ -1905,36 +2450,27 @@ footer {
       }
     }
   }
-
-  function onScroll() {
-    if (!scrollRaf) scrollRaf = requestAnimationFrame(paintScrollState);
-  }
-  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("scroll", function () { if (!scrollRaf) scrollRaf = requestAnimationFrame(paintScrollState); }, { passive: true });
   window.addEventListener("resize", measureScrollMetrics, { passive: true });
   window.addEventListener("load", measureScrollMetrics, { passive: true });
   measureScrollMetrics();
 
-  // Viewport visibility gating: pause offscreen canvas rAF loops and CSS animations
+  // Viewport visibility gating: pause offscreen canvas rAF and pipeline animations
   var heroZone = document.getElementById("hero-zone");
   var remoteSec = document.getElementById("remote");
   var heroVisible = true;
   var heroResumeCallbacks = [];
+
   function setHeroVisible(vis) {
     if (heroVisible === vis) return;
     heroVisible = vis;
-    if (heroZone) heroZone.classList.toggle("offscreen", !vis);
-    if (vis && !document.hidden) {
-      heroResumeCallbacks.forEach(function (fn) { fn(); });
-    }
+    if (vis && !document.hidden) heroResumeCallbacks.forEach(function (fn) { fn(); });
   }
   if ("IntersectionObserver" in window) {
     var visIo = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
-        if (e.target === heroZone) {
-          setHeroVisible(e.isIntersecting);
-        } else {
-          e.target.classList.toggle("offscreen", !e.isIntersecting);
-        }
+        if (e.target === heroZone) setHeroVisible(e.isIntersecting);
+        else e.target.classList.toggle("offscreen", !e.isIntersecting);
       });
     }, { rootMargin: "120px 0px" });
     if (heroZone) visIo.observe(heroZone);
@@ -1944,28 +2480,27 @@ footer {
     }
   }
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && heroVisible) {
-      heroResumeCallbacks.forEach(function (fn) { fn(); });
-    }
+    if (!document.hidden && heroVisible) heroResumeCallbacks.forEach(function (fn) { fn(); });
   });
 
+  // Scroll reveal
   if ("IntersectionObserver" in window && !REDUCED) {
-    var io = new IntersectionObserver(function (entries) {
+    var rvIo = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
         if (e.isIntersecting) {
           e.target.classList.add("in");
-          io.unobserve(e.target);
+          rvIo.unobserve(e.target);
         }
       });
-    }, { threshold: 0.12 });
-    document.querySelectorAll(".rv").forEach(function (el) { io.observe(el); });
+    }, { threshold: 0.08 });
+    document.querySelectorAll(".rv").forEach(function (el) { rvIo.observe(el); });
   } else {
     document.querySelectorAll(".rv").forEach(function (el) { el.classList.add("in"); });
   }
 
-  // Mouse-follow glow on cards (cache rect on pointerenter to avoid per-move layout reads)
+  // Bento spotlight hover (cached rect per pointerenter)
   if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
-    document.querySelectorAll(".glow").forEach(function (card) {
+    document.querySelectorAll(".bento").forEach(function (card) {
       var rect = null;
       card.addEventListener("pointerenter", function () { rect = card.getBoundingClientRect(); });
       card.addEventListener("pointermove", function (e) {
@@ -1975,107 +2510,26 @@ footer {
       });
       card.addEventListener("pointerleave", function () { rect = null; });
     });
+
+    // Subtle 3D perspective tilt on Hero showcase
+    var tiltCard = document.getElementById("tilt-card");
+    if (!REDUCED && tiltCard) {
+      var tiltRect = null;
+      tiltCard.addEventListener("pointerenter", function () { tiltRect = tiltCard.getBoundingClientRect(); });
+      tiltCard.addEventListener("pointermove", function (e) {
+        if (!tiltRect) tiltRect = tiltCard.getBoundingClientRect();
+        var x = (e.clientX - tiltRect.left) / tiltRect.width - 0.5;
+        var y = (e.clientY - tiltRect.top) / tiltRect.height - 0.5;
+        tiltCard.style.transform = "perspective(1200px) rotateX(" + (-y * 3.4).toFixed(2) + "deg) rotateY(" + (x * 4.2).toFixed(2) + "deg)";
+      });
+      tiltCard.addEventListener("pointerleave", function () {
+        tiltRect = null;
+        tiltCard.style.transform = "";
+      });
+    }
   }
 
-  // Subtle 3D tilt on Hero Stage card (desktop pointers only, cached rect)
-  var tiltCard = document.getElementById("tilt-card");
-  if (!REDUCED && window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
-    var tiltRect = null;
-    tiltCard.addEventListener("pointerenter", function () { tiltRect = tiltCard.getBoundingClientRect(); });
-    tiltCard.addEventListener("pointermove", function (e) {
-      if (!tiltRect) tiltRect = tiltCard.getBoundingClientRect();
-      var x = (e.clientX - tiltRect.left) / tiltRect.width - 0.5;
-      var y = (e.clientY - tiltRect.top) / tiltRect.height - 0.5;
-      tiltCard.style.transform = "perspective(1100px) rotateX(" + (-y * 4.5).toFixed(2) + "deg) rotateY(" + (x * 5.5).toFixed(2) + "deg)";
-    });
-    tiltCard.addEventListener("pointerleave", function () {
-      tiltRect = null;
-      tiltCard.style.transform = "";
-    });
-  }
-
-  // Ambient Hero Particle Field Canvas (30fps cap + auto-pause when offscreen)
-  (function initParticles() {
-    var canvas = document.getElementById("bg-field");
-    var ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    var w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-    var colors = ["#4285f4", "#34a853", "#fbbc04", "#38bdf8", "#ea4335"];
-    var pts = [];
-    var rafId = 0;
-    var lastTs = 0;
-    function resize() {
-      var r = canvas.parentElement.getBoundingClientRect();
-      w = r.width; h = r.height;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      pts = [];
-      var count = Math.min(28, Math.max(12, Math.floor(w / 52)));
-      for (var i = 0; i < count; i++) {
-        pts.push({
-          x: Math.random() * w,
-          y: Math.random() * h,
-          vx: (Math.random() - 0.5) * 0.55,
-          vy: (Math.random() - 0.5) * 0.55,
-          r: 1.4 + Math.random() * 2.2,
-          c: colors[i % colors.length]
-        });
-      }
-      renderFrame();
-    }
-    function renderFrame() {
-      ctx.clearRect(0, 0, w, h);
-      var dark = document.documentElement.dataset.theme === "night";
-      ctx.globalAlpha = dark ? 0.55 : 0.34;
-      for (var i = 0; i < pts.length; i++) {
-        var p = pts[i];
-        if (!REDUCED) {
-          p.x += p.vx; p.y += p.vy;
-          if (p.x < 0 || p.x > w) p.vx *= -1;
-          if (p.y < 0 || p.y > h) p.vy *= -1;
-        }
-        ctx.fillStyle = p.c;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fill();
-        for (var j = i + 1; j < pts.length; j++) {
-          var q = pts[j];
-          var dx = p.x - q.x, dy = p.y - q.y;
-          var dist = dx * dx + dy * dy;
-          if (dist < 14000) {
-            ctx.strokeStyle = p.c;
-            ctx.globalAlpha = (1 - dist / 14000) * (dark ? 0.16 : 0.10);
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(q.x, q.y);
-            ctx.stroke();
-            ctx.globalAlpha = dark ? 0.55 : 0.34;
-          }
-        }
-      }
-    }
-    function loop(ts) {
-      rafId = 0;
-      if (REDUCED || !heroVisible || document.hidden) return;
-      if (ts - lastTs >= 33) {
-        lastTs = ts;
-        renderFrame();
-      }
-      rafId = requestAnimationFrame(loop);
-    }
-    function start() {
-      if (!REDUCED && !rafId && heroVisible && !document.hidden) {
-        rafId = requestAnimationFrame(loop);
-      }
-    }
-    heroResumeCallbacks.push(start);
-    resize();
-    window.addEventListener("resize", resize, { passive: true });
-    start();
-  })();
-
-  // Screenshots & Lightbox
+  // Screenshots & Hero Switcher
   var SHOTS = [
     {
       src: "./img/chat-dark.webp",
@@ -2106,47 +2560,48 @@ footer {
   var curShot = document.documentElement.dataset.theme === "day" ? 1 : 0;
   var heroImg = document.getElementById("hero-shot-img");
   var stageTitle = document.getElementById("stage-win-title");
-  var shotBtns = Array.prototype.slice.call(document.querySelectorAll(".shot-pill[data-shot]"));
+  var shotTabs = Array.prototype.slice.call(document.querySelectorAll(".shot-tab[data-shot]"));
 
   function setHeroShot(idx) {
     curShot = (idx + SHOTS.length) % SHOTS.length;
     var s = SHOTS[curShot];
     heroImg.src = s.src;
     stageTitle.textContent = s.title;
-    shotBtns.forEach(function (b, i) { b.classList.toggle("active", i === curShot); });
+    shotTabs.forEach(function (b, i) { b.classList.toggle("active", i === curShot); });
   }
   setHeroShot(curShot);
-  shotBtns.forEach(function (b) {
+  shotTabs.forEach(function (b) {
     b.addEventListener("click", function () { setHeroShot(parseInt(b.dataset.shot, 10) || 0); });
   });
 
-  // Theme & Language toggles
-  document.getElementById("theme-toggle").addEventListener("click", function () {
+  // Theme & Language Toggles
+  function toggleTheme() {
     var d = document.documentElement;
     var next = d.dataset.theme === "night" ? "day" : "night";
     d.dataset.theme = next;
     try { localStorage.setItem("gdl-theme", next); } catch (e) {}
     var m = document.querySelector('meta[name="theme-color"]');
-    if (m) m.setAttribute("content", next === "night" ? "#070b14" : "#eef4ff");
+    if (m) m.setAttribute("content", next === "night" ? "#050814" : "#f5f8ff");
     if (curShot === 0 || curShot === 1) setHeroShot(next === "day" ? 1 : 0);
-  });
-
-  document.getElementById("lang-toggle").addEventListener("click", function () {
+  }
+  function toggleLang() {
     var d = document.documentElement;
     var next = d.dataset.lang === "ko" ? "en" : "ko";
     d.dataset.lang = next;
     d.lang = next;
     try { localStorage.setItem("gdl-lang", next); } catch (e) {}
     if (!lb.hidden) renderLb();
-    updateSim();
     applyHeroMode(simMode);
+    updateSim();
     measureScrollMetrics();
-  });
+  }
+  document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+  document.getElementById("lang-toggle").addEventListener("click", toggleLang);
 
-  // Live Oscilloscope + Hero Mode Simulation
+  // Hero Live Mode Switcher + Smooth Cubic Neon Oscilloscope
   var simMode = "idle";
-  var modeBtns = Array.prototype.slice.call(document.querySelectorAll(".mode-pill[data-sim]"));
-  var liveHud = document.getElementById("live-hud");
+  var modeBtns = Array.prototype.slice.call(document.querySelectorAll(".mode-btn[data-sim]"));
+  var signalDock = document.getElementById("signal-dock");
   var hudMsg = document.getElementById("hud-msg");
   var hudStat = document.getElementById("hud-stat");
   var scopeNVal = document.getElementById("scope-n-val");
@@ -2154,31 +2609,31 @@ footer {
 
   function applyHeroMode(mode) {
     simMode = mode;
-    var isKo = document.documentElement.dataset.lang === "ko";
+    var ko = isKo();
     modeBtns.forEach(function (b) {
       var on = b.dataset.sim === mode;
       b.classList.toggle("active", on);
       b.setAttribute("aria-selected", on ? "true" : "false");
     });
-    liveHud.classList.toggle("burst", mode === "stream");
-    liveHud.classList.toggle("remote", mode === "remote");
+    signalDock.classList.toggle("mode-stream", mode === "stream");
+    signalDock.classList.toggle("mode-remote", mode === "remote");
     if (mode === "idle") {
-      hudMsg.textContent = isKo
+      hudMsg.textContent = ko
         ? "유휴 상태 · 상시 타이머 0 · 리드로우 0 · Unix 소켓 0600"
         : "IDLE · 0 always-on timers · 0 redraws · Unix socket 0600";
       hudStat.textContent = "116 MB · 0.0%";
       scopeNVal.textContent = "0.0% CPU · 116 MB";
       scopeEVal.textContent = "~2.4% CPU · ~690 MB";
     } else if (mode === "stream") {
-      hudMsg.textContent = isKo
-        ? "SSE O(delta) 스트리밍 중 → push_delta 끝 블록 증분 렌더"
-        : "Streaming SSE O(delta) → tail push_delta incremental render";
+      hudMsg.textContent = ko
+        ? "SSE O(delta) 스트리밍 → push_delta 끝 블록 증분 렌더"
+        : "SSE O(delta) streaming → tail push_delta incremental render";
       hudStat.textContent = "118 MB · 1.2%";
       scopeNVal.textContent = "1.2% burst → 0.0% idle";
       scopeEVal.textContent = "~14% DOM diff · ~840 MB";
     } else {
-      hudMsg.textContent = isKo
-        ? "모바일 → gemini-remote(Go) → ui_control / run_command 실행"
+      hudMsg.textContent = ko
+        ? "모바일 → gemini-remote(Go) → ui_control / run_command"
         : "Phone → gemini-remote (Go) → ui_control / run_command";
       hudStat.textContent = "24 MB daemon";
       scopeNVal.textContent = "0.4% RPC · 116 MB";
@@ -2202,50 +2657,58 @@ footer {
       if (!heroVisible || document.hidden) return;
       ci = (ci + 1) % cycle.length;
       applyHeroMode(cycle[ci]);
-    }, 5200);
+    }, 5400);
   }
 
-  // Oscilloscope Canvas drawing (30fps cap, cached gradients, auto-pause when offscreen)
+  // Smooth Neon Spline Oscilloscope (30fps cap, auto-paused offscreen)
   (function initScope() {
     var sc = document.getElementById("scope-canvas");
     var ctx = sc.getContext("2d");
     if (!ctx) return;
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    var N = 84;
-    var nat = new Array(N).fill(0.04);
-    var ele = new Array(N).fill(0.42);
-    var tick = 0;
-    var cw = 240, ch = 64;
-    var eleGrad = null, natGrad = null;
-    var rafId = 0;
-    var lastTs = 0;
+    var N = 64;
+    var nat = new Array(N).fill(0.05);
+    var ele = new Array(N).fill(0.45);
+    var tick = 0, cw = 260, ch = 54, eleGrad = null, natGrad = null, rafId = 0, lastTs = 0;
 
     function resize() {
       var r = sc.getBoundingClientRect();
-      cw = Math.max(240, Math.round(r.width));
-      ch = 64;
+      cw = Math.max(220, Math.round(r.width));
+      ch = 54;
       sc.width = Math.round(cw * dpr);
       sc.height = Math.round(ch * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       eleGrad = ctx.createLinearGradient(0, 0, 0, ch);
-      eleGrad.addColorStop(0, "rgba(248,113,113,0.22)");
-      eleGrad.addColorStop(1, "rgba(0,0,0,0)");
+      eleGrad.addColorStop(0, "rgba(251,113,133,0.28)");
+      eleGrad.addColorStop(1, "rgba(251,113,133,0)");
       natGrad = ctx.createLinearGradient(0, 0, 0, ch);
-      natGrad.addColorStop(0, "rgba(74,222,128,0.28)");
-      natGrad.addColorStop(1, "rgba(0,0,0,0)");
+      natGrad.addColorStop(0, "rgba(52,211,153,0.34)");
+      natGrad.addColorStop(1, "rgba(6,182,212,0)");
       drawFrame();
     }
 
-    function drawCurve(arr, stroke, fillGrad) {
-      ctx.beginPath();
+    function drawSmooth(arr, stroke, fillGrad, glow) {
+      var pts = [];
       for (var i = 0; i < arr.length; i++) {
-        var x = (i / (arr.length - 1)) * cw;
-        var y = ch - 6 - arr[i] * (ch - 14);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        pts.push({ x: (i / (arr.length - 1)) * cw, y: ch - 5 - arr[i] * (ch - 12) });
       }
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (var j = 1; j < pts.length - 1; j++) {
+        var mx = (pts[j].x + pts[j + 1].x) * 0.5;
+        var my = (pts[j].y + pts[j + 1].y) * 0.5;
+        ctx.quadraticCurveTo(pts[j].x, pts[j].y, mx, my);
+      }
+      var last = pts[pts.length - 1];
+      ctx.lineTo(last.x, last.y);
+
+      ctx.save();
       ctx.strokeStyle = stroke;
-      ctx.lineWidth = 2.2;
+      ctx.lineWidth = 2.1;
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = 8;
       ctx.stroke();
+      ctx.restore();
 
       ctx.lineTo(cw, ch);
       ctx.lineTo(0, ch);
@@ -2258,15 +2721,15 @@ footer {
       ctx.clearRect(0, 0, cw, ch);
       ctx.strokeStyle = "rgba(148,163,184,0.12)";
       ctx.lineWidth = 1;
-      for (var g = 1; g <= 3; g++) {
-        var gy = Math.round((ch / 4) * g) + 0.5;
+      for (var g = 1; g <= 2; g++) {
+        var gy = Math.round((ch / 3) * g) + 0.5;
         ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cw, gy); ctx.stroke();
       }
-      drawCurve(ele, "#f87171", eleGrad);
-      drawCurve(nat, "#4ade80", natGrad);
+      drawSmooth(ele, "#fb7185", eleGrad, "rgba(251,113,133,0.6)");
+      drawSmooth(nat, simMode === "stream" ? "#22d3ee" : (simMode === "remote" ? "#a78bfa" : "#34d399"), natGrad, "rgba(52,211,153,0.65)");
     }
 
-    function stepAndDraw(ts) {
+    function step(ts) {
       rafId = 0;
       if (REDUCED || !heroVisible || document.hidden) return;
       if (ts - lastTs >= 33) {
@@ -2274,33 +2737,27 @@ footer {
         tick++;
         if (tick % 2 === 0) {
           nat.shift(); ele.shift();
-          var nVal = 0.04;
-          if (simMode === "stream") {
-            nVal = 0.16 + Math.abs(Math.sin(tick * 0.25)) * 0.18 + Math.random() * 0.06;
-          } else if (simMode === "remote") {
-            nVal = (tick % 12 < 4) ? 0.14 + Math.random() * 0.08 : 0.05;
-          }
-          var eSpike = (tick % 10 === 0) ? 0.26 : 0;
-          var eBase = simMode === "stream" ? 0.64 : 0.44;
-          var eVal = Math.min(0.92, eBase + Math.sin(tick * 0.17) * 0.09 + Math.random() * 0.12 + eSpike);
+          var nVal = 0.05;
+          if (simMode === "stream") nVal = 0.18 + Math.abs(Math.sin(tick * 0.24)) * 0.17 + Math.random() * 0.05;
+          else if (simMode === "remote") nVal = (tick % 12 < 4) ? 0.16 + Math.random() * 0.07 : 0.05;
+          var eSpike = (tick % 10 === 0) ? 0.24 : 0;
+          var eBase = simMode === "stream" ? 0.62 : 0.45;
+          var eVal = Math.min(0.92, eBase + Math.sin(tick * 0.19) * 0.10 + Math.random() * 0.11 + eSpike);
           nat.push(nVal);
           ele.push(eVal);
         }
         drawFrame();
       }
-      rafId = requestAnimationFrame(stepAndDraw);
+      rafId = requestAnimationFrame(step);
     }
 
     function start() {
-      if (!REDUCED && !rafId && heroVisible && !document.hidden) {
-        rafId = requestAnimationFrame(stepAndDraw);
-      }
+      if (!REDUCED && !rafId && heroVisible && !document.hidden) rafId = requestAnimationFrame(step);
     }
 
-    // Pre-seed full waveform so static screenshots show lively curves across the entire width
     for (var k = 0; k < N; k++) {
       ele.shift();
-      ele.push(0.42 + Math.sin(k * 0.45) * 0.11 + (k % 9 === 0 ? 0.22 : 0.04));
+      ele.push(0.44 + Math.sin(k * 0.42) * 0.12 + (k % 9 === 0 ? 0.20 : 0.04));
     }
     heroResumeCallbacks.push(start);
     resize();
@@ -2308,29 +2765,65 @@ footer {
     start();
   })();
 
-  // Section 2: 24h Uptime Race + Replay
+  // Section 01: Interactive 24h SVG Memory Divergence Chart
   var slider = document.getElementById("uptime-slider");
   var upLabel = document.getElementById("uptime-label");
   var upHr = document.getElementById("uptime-hr");
-  var nTxt = document.getElementById("native-ram-txt");
-  var eTxt = document.getElementById("electron-ram-txt");
-  var nBar = document.getElementById("native-ram-bar");
-  var eBar = document.getElementById("electron-ram-bar");
+  var nativeMbNum = document.getElementById("native-mb-num");
+  var electronMbNum = document.getElementById("electron-mb-num");
+  var electronCpuNum = document.getElementById("electron-cpu-num");
+  var ratioNum = document.getElementById("ratio-num");
+  var savedMbNum = document.getElementById("saved-mb-num");
+  var svgCursor = document.getElementById("svg-cursor");
+  var svgDotEle = document.getElementById("svg-dot-ele");
+  var svgDotNat = document.getElementById("svg-dot-nat");
   var racePlay = document.getElementById("race-play");
   var raceTimer = null;
 
+  function calcNativeMb(h) { return Math.round(112 + Math.min(h, 6) * 0.7); }
+  function calcElectronMb(h) { return Math.round(460 + h * 46); }
+  function chartX(h) { return 44 + ((h - 1) / 23) * 500; }
+  function chartY(mb) { return 164 - Math.min(1, mb / 1600) * 144; }
+
+  // Build static SVG curves once
+  (function buildDivergencePaths() {
+    var elePts = [], natPts = [];
+    for (var h = 1; h <= 24; h++) {
+      elePts.push(chartX(h).toFixed(1) + "," + chartY(calcElectronMb(h)).toFixed(1));
+      natPts.push(chartX(h).toFixed(1) + "," + chartY(calcNativeMb(h)).toFixed(1));
+    }
+    var eleLine = "M" + elePts.join(" L");
+    var natLine = "M" + natPts.join(" L");
+    document.getElementById("svg-ele-line").setAttribute("d", eleLine);
+    document.getElementById("svg-ele-area").setAttribute("d", eleLine + " L544,164 L44,164 Z");
+    document.getElementById("svg-nat-line").setAttribute("d", natLine);
+    document.getElementById("svg-nat-area").setAttribute("d", natLine + " L544,164 L44,164 Z");
+  })();
+
   function updateSim() {
     var h = parseInt(slider.value, 10) || 5;
-    var nativeMb = Math.round(112 + Math.min(h, 6) * 0.7);
-    var electronMb = Math.round(460 + h * 46);
-    var electronCpu = (1.4 + Math.min(h, 24) * 0.2).toFixed(1);
-    var maxMb = 1600;
+    var nMb = calcNativeMb(h);
+    var eMb = calcElectronMb(h);
+    var eCpu = (1.4 + Math.min(h, 24) * 0.2).toFixed(1);
+    var ratio = (eMb / nMb).toFixed(1);
+    var x = chartX(h).toFixed(1);
+    var yE = chartY(eMb).toFixed(1);
+    var yN = chartY(nMb).toFixed(1);
+
     upLabel.textContent = h === 5 ? "5h 13m" : (h + "h");
     upHr.textContent = h + "h";
-    nTxt.textContent = "~" + nativeMb + " MB · 0.0% idle CPU";
-    eTxt.textContent = "~" + electronMb + " MB · ~" + electronCpu + "% idle CPU";
-    nBar.style.width = Math.max(7, Math.round((nativeMb / maxMb) * 100)) + "%";
-    eBar.style.width = Math.min(100, Math.round((electronMb / maxMb) * 100)) + "%";
+    nativeMbNum.textContent = nMb + " MB";
+    electronMbNum.textContent = "~" + eMb + " MB";
+    electronCpuNum.textContent = "~" + eCpu + "% idle CPU";
+    ratioNum.textContent = ratio + "×";
+    savedMbNum.textContent = "-" + (eMb - nMb) + " MB";
+
+    svgCursor.setAttribute("x1", x);
+    svgCursor.setAttribute("x2", x);
+    svgDotEle.setAttribute("cx", x);
+    svgDotEle.setAttribute("cy", yE);
+    svgDotNat.setAttribute("cx", x);
+    svgDotNat.setAttribute("cy", yN);
   }
   slider.addEventListener("input", function () {
     if (raceTimer) { clearInterval(raceTimer); raceTimer = null; }
@@ -2345,22 +2838,35 @@ footer {
     updateSim();
     raceTimer = setInterval(function () {
       cur++;
-      if (cur > 24) {
-        clearInterval(raceTimer);
-        raceTimer = null;
-        return;
-      }
+      if (cur > 24) { clearInterval(raceTimer); raceTimer = null; return; }
       slider.value = cur;
       updateSim();
-    }, 110);
+    }, 100);
   });
 
-  // Section 3: Interactive Dark/Light Theme Curtain Slider
+  // 10 Static CI Invariants Filter
+  var invBtns = Array.prototype.slice.call(document.querySelectorAll(".filter-btn[data-inv-filter]"));
+  var invItems = Array.prototype.slice.call(document.querySelectorAll("#inv-matrix .inv-item"));
+  invBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var cat = btn.dataset.invFilter;
+      invBtns.forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      invItems.forEach(function (item) {
+        item.hidden = cat !== "all" && item.dataset.cat !== cat;
+      });
+      measureScrollMetrics();
+    });
+  });
+
+  // Section 02: Interactive Dark/Light Theme Curtain
   (function initCurtain() {
     var el = document.getElementById("theme-curtain");
     if (!el) return;
-    var dragging = false;
-    var pct = 50;
+    var dragging = false, pct = 50;
     function setPct(v) {
       pct = Math.max(6, Math.min(94, v));
       el.style.setProperty("--pos", pct + "%");
@@ -2383,12 +2889,16 @@ footer {
       if (e.key === "ArrowLeft") setPct(pct - 5);
       else if (e.key === "ArrowRight") setPct(pct + 5);
     });
+    document.querySelectorAll("[data-curtain-snap]").forEach(function (btn) {
+      btn.addEventListener("click", function () { setPct(parseFloat(btn.dataset.curtainSnap) || 50); });
+    });
   })();
 
-  // Section 4: Interactive 23-Tool Console
+  // Section 03: Interactive 23-Tool Console + Pipeline Pulse
   var TOOL_SAMPLES = {
     shell: {
       title: "gemini-remote :: run_command (background tracked)",
+      nodes: ["node-cloud", "node-daemon"],
       lines: [
         '<span class="c-d"># Dispatched from Gemini Mobile → Go daemon</span>',
         '<span class="c-k">→ tool:</span> run_command({ cmd: "./scripts/perf-guard.sh --full" })',
@@ -2401,6 +2911,7 @@ footer {
     },
     fs: {
       title: "gemini-remote :: scoped filesystem sandbox",
+      nodes: ["node-ui", "node-daemon"],
       lines: [
         '<span class="c-d"># Verified against allowed_folders whitelist</span>',
         '<span class="c-k">→ tool:</span> grep_search({ dir: "~/dev/git-repo/gemini-remote-linux", q: "push_delta" })',
@@ -2411,6 +2922,7 @@ footer {
     },
     mcp: {
       title: "gemini-remote :: built-in Git + Obsidian + stdio MCP",
+      nodes: ["node-daemon", "node-cloud"],
       lines: [
         '<span class="c-d"># Native Go MCP registry + external stdio bridges</span>',
         '<span class="c-k">→ tool:</span> list_mcp()',
@@ -2422,6 +2934,7 @@ footer {
     },
     cua: {
       title: "gemini-remote :: Wayland/Hyprland Computer Use",
+      nodes: ["node-cloud", "node-daemon", "node-ui"],
       lines: [
         '<span class="c-d"># Pure-Python Wayland protocol + AT-SPI2 accessibility tree</span>',
         '<span class="c-k">→ tool:</span> ui_control({ action: "inspect_tree", compositor: "hyprland" })',
@@ -2435,8 +2948,16 @@ footer {
   var toolTabs = Array.prototype.slice.call(document.querySelectorAll(".tool-tab[data-tool]"));
   var consoleTitle = document.getElementById("console-title");
   var consoleBody = document.getElementById("console-body");
-  var nodeDaemon = document.getElementById("node-daemon");
   var consoleTimer = null;
+
+  function pulseNodes(ids) {
+    ids.forEach(function (id) {
+      var n = document.getElementById(id);
+      if (!n) return;
+      n.classList.add("hit");
+      setTimeout(function () { n.classList.remove("hit"); }, 620);
+    });
+  }
 
   function renderToolConsole(key) {
     var data = TOOL_SAMPLES[key] || TOOL_SAMPLES.shell;
@@ -2451,8 +2972,7 @@ footer {
       consoleBody.innerHTML = data.lines.join("\n");
       return;
     }
-    nodeDaemon.classList.add("hit");
-    setTimeout(function () { nodeDaemon.classList.remove("hit"); }, 550);
+    pulseNodes(data.nodes || ["node-daemon"]);
     var idx = 0;
     consoleBody.innerHTML = '<span class="caret"></span>';
     consoleTimer = setInterval(function () {
@@ -2465,25 +2985,47 @@ footer {
       } else {
         consoleBody.innerHTML = shown + '\n<span class="caret"></span>';
       }
-    }, 150);
+    }, 130);
   }
   toolTabs.forEach(function (t) {
     t.addEventListener("click", function () { renderToolConsole(t.dataset.tool); });
   });
-  // Initial static fill so first paint looks rich immediately
   consoleBody.innerHTML = TOOL_SAMPLES.shell.lines.join("\n") + ' <span class="caret"></span>';
 
-  // Copy buttons
+  // Section 04: Install Terminal Tabs & Copy
+  var termTabs = Array.prototype.slice.call(document.querySelectorAll(".term-tab[data-term]"));
+  var termPanels = Array.prototype.slice.call(document.querySelectorAll("[data-term-panel]"));
+  var activeTermKey = "all";
+  termTabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      activeTermKey = tab.dataset.term;
+      termTabs.forEach(function (t) {
+        var on = t === tab;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      termPanels.forEach(function (p) { p.hidden = p.dataset.termPanel !== activeTermKey; });
+      measureScrollMetrics();
+    });
+  });
+
+  function copyTextWithFeedback(text, btn) {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(text.trim()).then(function () {
+      if (!btn) return;
+      var orig = btn.innerHTML;
+      btn.textContent = isKo() ? "복사됨 ✓" : "Copied ✓";
+      setTimeout(function () { btn.innerHTML = orig; }, 1600);
+    }).catch(function () {});
+  }
+  document.getElementById("term-copy-btn").addEventListener("click", function () {
+    var activePanel = document.querySelector('[data-term-panel="' + activeTermKey + '"]');
+    if (activePanel) copyTextWithFeedback(activePanel.innerText, this);
+  });
   document.querySelectorAll("[data-copy-target]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var el = document.getElementById(btn.dataset.copyTarget);
-      if (!el || !navigator.clipboard) return;
-      navigator.clipboard.writeText(el.innerText.trim()).then(function () {
-        var orig = btn.innerHTML;
-        var isKo = document.documentElement.dataset.lang === "ko";
-        btn.textContent = isKo ? "복사됨 ✓" : "Copied ✓";
-        setTimeout(function () { btn.innerHTML = orig; }, 1600);
-      }).catch(function () {});
+      if (el) copyTextWithFeedback(el.innerText, btn);
     });
   });
 
@@ -2499,7 +3041,7 @@ footer {
     lbImg.src = s.src;
     lbImg.alt = s.title;
     lbTitle.textContent = s.title + " (" + (lbIdx + 1) + "/" + SHOTS.length + ")";
-    lbCap.textContent = document.documentElement.dataset.lang === "ko" ? s.ko : s.en;
+    lbCap.textContent = isKo() ? s.ko : s.en;
   }
   function openLb(idx) {
     lbIdx = (idx + SHOTS.length) % SHOTS.length;
@@ -2519,11 +3061,81 @@ footer {
   document.getElementById("lb-next").addEventListener("click", function () { lbIdx = (lbIdx + 1) % SHOTS.length; renderLb(); });
   document.getElementById("lb-close").addEventListener("click", closeLb);
   lb.addEventListener("click", function (e) { if (e.target === lb) closeLb(); });
+
+  // Command Palette (Ctrl+K / ⌘K)
+  var pal = document.getElementById("palette");
+  var palInput = document.getElementById("palette-input");
+  var palList = document.getElementById("palette-list");
+  var palSel = 0;
+  var palFiltered = [];
+
+  var PAL_ACTIONS = [
+    { ko: "성능 비교 & 24h 메모리 곡선으로 이동", en: "Jump to Telemetry & 24h Curve", tag: "#race", run: function () { location.hash = "#race"; } },
+    { ko: "실화면 & 다크/라이트 커튼으로 이동", en: "Jump to Real HiDPI Workspace", tag: "#screens", run: function () { location.hash = "#screens"; } },
+    { ko: "원격 파이프라인 & 23종 도구로 이동", en: "Jump to Remote Pipeline & 23 Tools", tag: "#remote", run: function () { location.hash = "#remote"; } },
+    { ko: "원커맨드 설치 가이드로 이동", en: "Jump to Quick Install", tag: "#install", run: function () { location.hash = "#install"; } },
+    { ko: "테마 전환 (Day / Night)", en: "Toggle Theme (Day / Night)", tag: "theme", run: toggleTheme },
+    { ko: "언어 전환 (한국어 / English)", en: "Switch Language (KO / EN)", tag: "lang", run: toggleLang },
+    { ko: "채팅 · 다크 실화면 확대 보기", en: "Inspect Chat · Dark HiDPI", tag: "shot", run: function () { openLb(0); } },
+    { ko: "채팅 · 라이트 실화면 확대 보기", en: "Inspect Chat · Light HiDPI", tag: "shot", run: function () { openLb(1); } },
+    { ko: "예약된 작업 실화면 확대 보기", en: "Inspect Schedules HiDPI", tag: "shot", run: function () { openLb(2); } },
+    { ko: "설정 & 원격 제어 실화면 확대 보기", en: "Inspect Settings HiDPI", tag: "shot", run: function () { openLb(3); } },
+    { ko: "원커맨드 설치 명령 복사", en: "Copy Quick Install Command", tag: "copy", run: function () { copyTextWithFeedback(document.getElementById("hero-cmd").innerText); } }
+  ];
+
+  function renderPalette() {
+    var q = (palInput.value || "").trim().toLowerCase();
+    var ko = isKo();
+    palFiltered = PAL_ACTIONS.filter(function (a) {
+      return !q || a.ko.toLowerCase().indexOf(q) >= 0 || a.en.toLowerCase().indexOf(q) >= 0 || a.tag.indexOf(q) >= 0;
+    });
+    if (palSel >= palFiltered.length) palSel = 0;
+    if (!palFiltered.length) {
+      palList.innerHTML = '<div class="pal-empty">' + (ko ? "일치하는 항목이 없습니다" : "No matching commands") + "</div>";
+      return;
+    }
+    palList.innerHTML = palFiltered.map(function (a, i) {
+      return '<button type="button" class="pal-item' + (i === palSel ? " sel" : "") + '" data-pi="' + i + '"><span>' + (ko ? a.ko : a.en) + "</span><small>" + a.tag + "</small></button>";
+    }).join("");
+    palList.querySelectorAll(".pal-item").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.dataset.pi, 10) || 0;
+        closePalette();
+        if (palFiltered[idx]) palFiltered[idx].run();
+      });
+    });
+  }
+  function openPalette() {
+    palInput.value = "";
+    palInput.placeholder = isKo() ? "섹션 이동, 실화면 열기, 테마/언어 전환 검색..." : "Jump to section, screenshot, or action...";
+    palSel = 0;
+    pal.hidden = false;
+    renderPalette();
+    palInput.focus();
+  }
+  function closePalette() { pal.hidden = true; }
+
+  document.getElementById("palette-open").addEventListener("click", openPalette);
+  palInput.addEventListener("input", function () { palSel = 0; renderPalette(); });
+  pal.addEventListener("click", function (e) { if (e.target === pal) closePalette(); });
+
   document.addEventListener("keydown", function (e) {
-    if (lb.hidden) return;
-    if (e.key === "Escape") closeLb();
-    else if (e.key === "ArrowLeft") { lbIdx = (lbIdx - 1 + SHOTS.length) % SHOTS.length; renderLb(); }
-    else if (e.key === "ArrowRight") { lbIdx = (lbIdx + 1) % SHOTS.length; renderLb(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if (pal.hidden) openPalette(); else closePalette();
+      return;
+    }
+    if (!pal.hidden) {
+      if (e.key === "Escape") { closePalette(); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); palSel = (palSel + 1) % Math.max(1, palFiltered.length); renderPalette(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); palSel = (palSel - 1 + Math.max(1, palFiltered.length)) % Math.max(1, palFiltered.length); renderPalette(); return; }
+      if (e.key === "Enter" && palFiltered[palSel]) { e.preventDefault(); var act = palFiltered[palSel]; closePalette(); act.run(); return; }
+    }
+    if (!lb.hidden) {
+      if (e.key === "Escape") closeLb();
+      else if (e.key === "ArrowLeft") { lbIdx = (lbIdx - 1 + SHOTS.length) % SHOTS.length; renderLb(); }
+      else if (e.key === "ArrowRight") { lbIdx = (lbIdx + 1) % SHOTS.length; renderLb(); }
+    }
   });
 })();
 </script>
