@@ -2178,7 +2178,7 @@ footer {
         </div>
         <div class="screen-copy">
           <h3><span lang="ko">예약된 작업 &amp; 키보드 중심 워크플로우</span><span lang="en">Scheduled Actions &amp; Keyboard-First Flow</span></h3>
-          <p><span lang="ko">클라우드·로컬·추천 예약을 한 화면에서 관리하고 완료 시 <code>notify-send</code> 알림을 띄웁니다. 통합 검색으로 과거 대화의 정확한 턴으로 바로 점프합니다.</span><span lang="en">Manage cloud, local, and recommended schedules with <code>notify-send</code> desktop alerts, plus full-text search that jumps straight to matching turns.</span></p>
+          <p><span lang="ko">클라우드·로컬·추천 예약을 한 화면에서 관리하고 완료 시 <code>notify-send</code> 알림을 띄웁니다. 통합 검색으로 과거 대화의 정확한 턴으로 바로 점프합니다. 사이드바는 경계선을 끌어 220–480px로 넓히거나 좁힐 수 있고, 그 폭은 다음 실행에도 남습니다(더블클릭하면 기본 폭).</span><span lang="en">Manage cloud, local, and recommended schedules with <code>notify-send</code> desktop alerts, plus full-text search that jumps straight to matching turns. Drag the sidebar edge to resize it between 220 and 480 px; the width is remembered across launches (double-click to reset).</span></p>
           <div class="kbd-grid">
             <span class="kbd-item"><kbd>Ctrl+K</kbd><span lang="ko">검색 · 턴 점프</span><span lang="en">Search &amp; jump</span></span>
             <span class="kbd-item"><kbd>Ctrl+N</kbd><span lang="ko">새 대화</span><span lang="en">New chat</span></span>
@@ -2333,7 +2333,10 @@ footer {
 <span class="c-cmd">gemini-remote</span> register
 <span class="c-cmd">gemini-remote</span> service install
 
-<span class="c-cm"># 4. Launch native Linux Gemini Desktop</span>
+<span class="c-cm"># 4. Self-check sign-in, Robin, Punctual &amp; local socket</span>
+<span class="c-cmd">gemini-remote</span> doctor
+
+<span class="c-cm"># 5. Launch native Linux Gemini Desktop</span>
 <span class="c-cmd">gemini-ui</span></code></pre>
 
         <pre data-term-panel="build" hidden><code><span class="c-cm"># Build Go daemon + Rust release binary &amp; install systemd unit</span>
@@ -2352,6 +2355,7 @@ footer {
 <span class="c-cmd">gemini-remote</span> folders add ~/dev/git-repo
 <span class="c-cmd">gemini-remote</span> register
 <span class="c-cmd">gemini-remote</span> service install
+<span class="c-cmd">gemini-remote</span> doctor
 <span class="c-cmd">gemini-ui</span></code></pre>
       </div>
 
@@ -2362,6 +2366,7 @@ footer {
           <li><b>Build:</b> Go 1.27+ · Rust 1.85+ (<code>edition = "2024"</code>)</li>
           <li><b><span lang="ko">선택 도구</span><span lang="en">Optional</span>:</b> <code>xdg-desktop-portal</code>, <code>slurp</code>+<code>grim</code>, <code>pw-record</code>, <code>notify-send</code></li>
           <li><b><span lang="ko">성능 가드</span><span lang="en">Perf Guard</span>:</b> <code>./scripts/perf-guard.sh --full</code></li>
+          <li><b><span lang="ko">자가 진단</span><span lang="en">Self-check</span>:</b> <code>gemini-remote doctor [--json]</code></li>
           <li><b><span lang="ko">제거</span><span lang="en">Uninstall</span>:</b> <code>./uninstall.sh</code></li>
         </ul>
       </div>
