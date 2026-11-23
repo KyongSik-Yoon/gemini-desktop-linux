@@ -1,4 +1,4 @@
-use crate::i18n::t;
+use crate::i18n::{pick, t};
 use crate::icons::Icon;
 use crate::theme::{font_medium, font_regular, font_semibold};
 use crate::{
@@ -997,6 +997,234 @@ impl App {
             })
             .width(Fill)
             .height(Fill);
+
+        stack![backdrop, positioned].width(Fill).height(Fill).into()
+    }
+
+    /// 태스크 실행 대상 원격 PC 선택 플로팅 팝오버.
+    pub(crate) fn view_device_popover_overlay(&self, is_welcome_view: bool) -> Element<'_, Message> {
+        let loc = self.locale;
+        let pal = &self.palette;
+        let bg_popover = pal.bg_popover;
+        let bg_hover = pal.bg_hover;
+        let accent_soft = pal.accent_soft;
+        let border_subtle = pal.border_subtle;
+        let text_primary = pal.text_primary;
+        let text_strong = pal.text_strong;
+        let text_secondary = pal.text_secondary;
+        let text_muted = pal.text_muted;
+        let accent = pal.accent;
+        let success = pal.success;
+
+        let active_id = self
+            .selected_target_device()
+            .map(|d| d.device_id);
+        let devices = self.available_remote_devices();
+
+        let mut list = column![
+            container(
+                text(t(loc, "원격 실행 대상 PC"))
+                    .size(12)
+                    .font(font_medium())
+                    .color(text_secondary),
+            )
+            .padding([6, 12]),
+        ]
+        .spacing(2);
+
+        if devices.is_empty() {
+            list = list.push(
+                container(
+                    text(t(loc, "등록된 원격 기기가 없습니다."))
+                        .size(13)
+                        .color(text_secondary),
+                )
+                .padding([10, 12]),
+            );
+        } else {
+            for d in devices {
+                let is_selected = active_id
+                    .as_ref()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(&d.device_id));
+                let is_local = !self.remote_status.device_id.is_empty()
+                    && d.device_id
+                        .eq_ignore_ascii_case(&self.remote_status.device_id);
+                let is_online = if is_local {
+                    self.remote_status.remote_enabled && self.remote_status.punctual_connected
+                } else {
+                    d.remote_enabled
+                };
+                let dot_c = if is_online { success } else { text_muted };
+                let local_prefix = if is_local {
+                    pick(loc, "이 PC · ", "This PC · ")
+                } else {
+                    ""
+                };
+                let subtitle = if is_online {
+                    if loc.is_en() {
+                        format!("{local_prefix}Remote connected · {} tools", d.tool_count)
+                    } else {
+                        format!("{local_prefix}원격 연결됨 · 도구 {}개", d.tool_count)
+                    }
+                } else if d.remote_enabled {
+                    if loc.is_en() {
+                        format!("{local_prefix}Remote idle")
+                    } else {
+                        format!("{local_prefix}원격 대기 중")
+                    }
+                } else if loc.is_en() {
+                    format!("{local_prefix}Remote off")
+                } else {
+                    format!("{local_prefix}원격 제어 꺼짐")
+                };
+
+                let label_col = column![
+                    row![
+                        container(space::horizontal())
+                            .width(Length::Fixed(7.0))
+                            .height(Length::Fixed(7.0))
+                            .style(move |_| container::Style {
+                                background: Some(Background::Color(dot_c)),
+                                border: Border {
+                                    radius: 4.0.into(),
+                                    ..Border::default()
+                                },
+                                ..container::Style::default()
+                            }),
+                        Icon::Laptop.view(14.0, text_primary),
+                        text(d.device_name.clone())
+                            .size(13.5)
+                            .font(font_medium())
+                            .color(if is_selected { text_strong } else { text_primary }),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                    text(subtitle).size(11.5).color(text_secondary),
+                ]
+                .spacing(2);
+
+                let mut item_row = row![label_col, space::horizontal()]
+                    .spacing(12)
+                    .align_y(Alignment::Center);
+                if is_selected {
+                    item_row = item_row.push(Icon::Check.view(15.5, accent));
+                }
+
+                let id_clone = d.device_id.clone();
+                let item_btn = button(item_row)
+                    .on_press(Message::SelectDevice(id_clone))
+                    .width(Fill)
+                    .padding([9, 12])
+                    .style(move |_, status| {
+                        let hovered = matches!(status, button::Status::Hovered);
+                        let bg = if is_selected {
+                            Some(Background::Color(accent_soft))
+                        } else if hovered {
+                            Some(Background::Color(bg_hover))
+                        } else {
+                            None
+                        };
+                        button::Style {
+                            background: bg,
+                            text_color: text_primary,
+                            border: Border {
+                                radius: 12.0.into(),
+                                ..Border::default()
+                            },
+                            ..button::Style::default()
+                        }
+                    });
+                list = list.push(item_btn);
+            }
+        }
+
+        // 하단 원격 설정 바로가기
+        list = list.push(
+            container(space::horizontal())
+                .width(Fill)
+                .height(Length::Fixed(1.0))
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(border_subtle)),
+                    ..container::Style::default()
+                }),
+        );
+        list = list.push(
+            button(
+                row![
+                    Icon::Settings.view(14.0, text_secondary),
+                    text(t(loc, "원격 PC 및 허용 폴더 설정"))
+                        .size(12.5)
+                        .color(text_secondary),
+                ]
+                .spacing(7)
+                .align_y(Alignment::Center),
+            )
+            .on_press(Message::OpenSettingsModal)
+            .width(Fill)
+            .padding([8, 12])
+            .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 10.0)),
+        );
+
+        let shadow_alpha = if pal.is_dark { 0.45 } else { 0.14 };
+        let card = container(list)
+            .width(Length::Fixed(310.0))
+            .padding(8)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg_popover)),
+                border: Border {
+                    radius: 18.0.into(),
+                    width: 1.0,
+                    color: border_subtle,
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, shadow_alpha),
+                    offset: Vector::new(0.0, 8.0),
+                    blur_radius: 26.0,
+                },
+                ..container::Style::default()
+            });
+
+        let backdrop = mouse_area(container(space::horizontal()).width(Fill).height(Fill))
+            .on_press(Message::CloseDeviceMenu);
+
+        let max_w = if is_welcome_view {
+            WELCOME_MAX_WIDTH
+        } else {
+            CONTENT_MAX_WIDTH
+        };
+        let aligned_row = container(
+            container(row![card, space::horizontal()].width(Fill))
+                .max_width(max_w)
+                .width(Fill),
+        )
+        .padding(Padding {
+            top: 0.0,
+            right: 24.0,
+            bottom: 0.0,
+            left: 36.0,
+        })
+        .center_x(Fill)
+        .width(Fill);
+
+        let positioned: Element<'_, Message> = if is_welcome_view {
+            column![
+                space::vertical().height(Length::FillPortion(6)),
+                aligned_row,
+                space::vertical().height(Length::FillPortion(3)),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .into()
+        } else {
+            column![
+                space::vertical().height(Fill),
+                aligned_row,
+                space::vertical().height(Length::Fixed(94.0)),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .into()
+        };
 
         stack![backdrop, positioned].width(Fill).height(Fill).into()
     }

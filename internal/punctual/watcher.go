@@ -199,6 +199,22 @@ func (w *Watcher) chooseServer(ctx context.Context, token string) (string, error
 	return proto.DecodeChooseServerResponse(body)
 }
 
+// ProbeServer는 현재 OAuth 토큰으로 Punctual chooseServer 엔드포인트 응답이 정상인지 1회 점검한다.
+func (w *Watcher) ProbeServer(ctx context.Context) error {
+	token, err := w.authMgr.AccessToken(ctx)
+	if err != nil {
+		return fmt.Errorf("액세스 토큰 획득 실패: %w", err)
+	}
+	sid, err := w.chooseServer(ctx, token)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(sid) == "" {
+		return fmt.Errorf("chooseServer 응답에 세션 ID가 비어 있습니다")
+	}
+	return nil
+}
+
 func (w *Watcher) watchOnce(parentCtx context.Context, handler Handler) error {
 	// Signaler MultiWatch 구독이 약 20분 만에 묵시 만료되므로 만료 도래 전 선제 회전한다.
 	ctx, cancel := context.WithTimeout(parentCtx, w.effectiveSessionMaxAge())

@@ -896,6 +896,7 @@ func DecodeWakeUpPayload(streamID int64, objectPath string, payload []byte) (*Wa
 	for _, f := range fields {
 		if f.Num == 1 && f.WireType == WireBytes { // repeated ClientAction
 			subFields, _ := ParseFields(f.Bytes)
+			logUnknownFieldsIfDebug("ClientSyncAction", subFields, knownClientSyncActionFields)
 			for _, sf := range subFields {
 				actionNums = append(actionNums, sf.Num)
 				switch sf.Num {

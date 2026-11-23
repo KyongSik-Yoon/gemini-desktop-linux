@@ -889,6 +889,7 @@ func DecodeProcessQueryResponseFrame(data []byte) ([]ChatStreamChunk, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ProcessQueryResponse 파싱 실패: %w", err)
 	}
+	logUnknownFieldsIfDebug("ProcessQueryResponse", fields, knownProcessQueryRespFields)
 	var out []ChatStreamChunk
 	for _, f := range fields {
 		switch f.Num {
@@ -947,6 +948,7 @@ func decodeContinuationIdentifiers(data []byte) (convID, reqID string) {
 func decodeClientGenerateResponse(data []byte) ChatStreamChunk {
 	chunk := ChatStreamChunk{Type: "data"}
 	fields, _ := ParseFields(data)
+	logUnknownFieldsIfDebug("ClientGenerateResponse", fields, knownClientGenerateRespFields)
 	for _, f := range fields {
 		switch f.Num {
 		case 1: // repeated ModelResponse (첫 번째 후보 사용)

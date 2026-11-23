@@ -1521,4 +1521,41 @@ mod tests {
         assert!(pending.take_remaining_utf8_line().is_none());
         assert_eq!(url_encode_query("c_1/2?x=1#a"), "c_1%2F2%3Fx%3D1%23a");
     }
+
+    #[test]
+    fn localapi_json_계약_및_미래_필드_하위호환_역직렬화() {
+        // 1) /health 계약
+        let health: HealthResponse = serde_json::from_str(
+            r#"{"ok":true,"device_id":"TEST-DEVICE-0001","device_name":"test-ws","socket":"/tmp/a.sock","future_field":123}"#,
+        )
+        .expect("HealthResponse 역직렬화 성공");
+        assert!(health.ok);
+        assert_eq!(health.device_name, "test-ws");
+
+        // 2) /v1/preferences 전체 필드 계약
+        let prefs: UIPreferences = serde_json::from_str(
+            r#"{
+                "selected_model_id":"gemini-3-pro",
+                "thinking_level":4,
+                "theme_mode":"dark",
+                "language":"ko",
+                "personal_intelligence":true,
+                "custom_instructions":"간결하게",
+                "close_to_tray":false,
+                "sidebar_width":320,
+                "unknown_future_opt":{"nested":true}
+            }"#,
+        )
+        .expect("UIPreferences 전체 역직렬화 성공");
+        assert_eq!(prefs.selected_model_id, "gemini-3-pro");
+        assert_eq!(prefs.thinking_level, 4);
+        assert!(!prefs.close_to_tray);
+        assert_eq!(prefs.sidebar_width, 320);
+
+        // 3) 구버전 데몬(필드 누락) 하위 호환 기본값 확인
+        let minimal: UIPreferences =
+            serde_json::from_str("{}").expect("빈 UIPreferences 역직렬화 성공");
+        assert!(minimal.close_to_tray);
+        assert_eq!(minimal.sidebar_width, 0);
+    }
 }

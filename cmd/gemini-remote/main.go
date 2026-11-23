@@ -141,6 +141,9 @@ func main() {
 		fmt.Printf("설정 파일: %s\n토큰 파일: %s\n로컬 소켓: %s\n기기 ID:   %s\n기기 이름: %s\n연결 폴더: %v\n",
 			cfgPath, tokPath, sockPath, cfg.DeviceID, cfg.DeviceName, cfg.ConnectedFolders)
 
+	case "doctor":
+		handleDoctor(ctx, cfg, authMgr, os.Args[2:])
+
 	default:
 		printUsage()
 		os.Exit(1)
@@ -473,7 +476,8 @@ func printUsage() {
   gemini-remote folders [list|add|remove]   허용 워크스페이스 폴더 조회/추가/제거
   gemini-remote service [install|uninstall|status]  systemd 사용자 서비스 관리
   gemini-remote test-tool <name> [json]     로컬 도구(19종) 단독 실행 테스트
-  gemini-remote status                      현재 기기 ID, 소켓 경로 및 설정 상태 출력`)
+  gemini-remote status                      현재 기기 ID, 소켓 경로 및 설정 상태 출력
+  gemini-remote doctor [--json]             인증·Robin·Punctual·로컬 소켓 프로토콜 자가 진단`)
 }
 
 func fatalf(format string, args ...any) {
