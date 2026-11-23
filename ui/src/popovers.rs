@@ -741,7 +741,7 @@ impl App {
                 top: 235.0,
                 right: 0.0,
                 bottom: 0.0,
-                left: 248.0,
+                left: (self.sidebar_width - 36.0).max(16.0),
             })
             .width(Fill)
             .height(Fill);
@@ -830,7 +830,7 @@ impl App {
                 top: 420.0,
                 right: 0.0,
                 bottom: 0.0,
-                left: 196.0,
+                left: (self.sidebar_width - 88.0).max(16.0),
             })
             .width(Fill)
             .height(Fill);
@@ -993,7 +993,7 @@ impl App {
                 top: 380.0,
                 right: 0.0,
                 bottom: 0.0,
-                left: 256.0,
+                left: (self.sidebar_width - 28.0).max(16.0),
             })
             .width(Fill)
             .height(Fill);

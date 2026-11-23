@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +64,13 @@ type LibraryEntry struct {
 	CreatedAtUnix  int64  `json:"created_at_unix"`
 }
 
-// UIPreferences는 앱의 영속 환경설정(모델, 사고 수준, 테마, 언어, 개인 인텔리전스, 지침, 트레이 최소화 등)이다.
+const (
+	// SidebarMinWidth와 SidebarMaxWidth는 UI 사이드바 폭 허용 범위(px)다.
+	SidebarMinWidth = 220
+	SidebarMaxWidth = 480
+)
+
+// UIPreferences는 앱의 영속 환경설정(모델, 사고 수준, 테마, 언어, 개인 인텔리전스, 지침, 트레이 최소화, 사이드바 폭 등)이다.
 type UIPreferences struct {
 	SelectedModelID      string              `json:"selected_model_id,omitempty"`
 	ThinkingLevel        int32               `json:"thinking_level,omitempty"` // 0: 자동, 1: 낮음, 4: 보통, 2: 높음
@@ -72,6 +79,7 @@ type UIPreferences struct {
 	PersonalIntelligence bool                `json:"personal_intelligence"`
 	CustomInstructions   string              `json:"custom_instructions,omitempty"`
 	CloseToTray          *bool               `json:"close_to_tray,omitempty"`
+	SidebarWidth         int                 `json:"sidebar_width,omitempty"` // 0이면 UI 기본값(284px) 사용
 	UnreadOverrides      map[string]bool     `json:"unread_overrides,omitempty"`
 	NotebookLinks        map[string][]string `json:"notebook_links,omitempty"`
 }
@@ -194,6 +202,19 @@ func (st *WorkspaceStore) PatchPreferences(patch map[string]any) (UIPreferences,
 	if v, ok := patch["close_to_tray"].(bool); ok {
 		b := v
 		st.prefs.CloseToTray = &b
+	}
+	if v, ok := patch["sidebar_width"].(float64); ok && !math.IsNaN(v) && !math.IsInf(v, 0) {
+		w := int(math.Round(v))
+		if w <= 0 {
+			st.prefs.SidebarWidth = 0
+		} else {
+			if w < SidebarMinWidth {
+				w = SidebarMinWidth
+			} else if w > SidebarMaxWidth {
+				w = SidebarMaxWidth
+			}
+			st.prefs.SidebarWidth = w
+		}
 	}
 	if err := st.saveFileLocked("ui_prefs.json", st.prefs); err != nil {
 		return st.prefs, err

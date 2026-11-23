@@ -247,3 +247,45 @@ func TestPreferencesCloseToTrayDefaultAndPatch(t *testing.T) {
 		t.Fatalf("재로드 후 close_to_tray=false가 유지되어야 함: %+v", reloaded.CloseToTray)
 	}
 }
+
+func TestPreferencesSidebarWidthPatchAndClamp(t *testing.T) {
+	dir := t.TempDir()
+	st := &WorkspaceStore{
+		dir:           dir,
+		runningScheds: make(map[string]bool),
+	}
+	st.load()
+
+	if got := st.GetPreferences().SidebarWidth; got != 0 {
+		t.Fatalf("기본 sidebar_width는 0(UI 기본값 사용)이어야 함: %d", got)
+	}
+
+	// 정상 범위 저장
+	updated, err := st.PatchPreferences(map[string]any{"sidebar_width": float64(360)})
+	if err != nil {
+		t.Fatalf("PatchPreferences(360) 실패: %v", err)
+	}
+	if updated.SidebarWidth != 360 {
+		t.Fatalf("sidebar_width=360 반영 실패: %d", updated.SidebarWidth)
+	}
+
+	// 하한·상한 클램프 검증
+	low, err := st.PatchPreferences(map[string]any{"sidebar_width": float64(100)})
+	if err != nil || low.SidebarWidth != SidebarMinWidth {
+		t.Fatalf("하한 클램프 실패: width=%d, err=%v", low.SidebarWidth, err)
+	}
+	high, err := st.PatchPreferences(map[string]any{"sidebar_width": float64(900)})
+	if err != nil || high.SidebarWidth != SidebarMaxWidth {
+		t.Fatalf("상한 클램프 실패: width=%d, err=%v", high.SidebarWidth, err)
+	}
+
+	// 디스크 재로드 유지 확인
+	st2 := &WorkspaceStore{
+		dir:           dir,
+		runningScheds: make(map[string]bool),
+	}
+	st2.load()
+	if got := st2.GetPreferences().SidebarWidth; got != SidebarMaxWidth {
+		t.Fatalf("재로드 후 sidebar_width=%d가 유지되어야 함: %d", SidebarMaxWidth, got)
+	}
+}

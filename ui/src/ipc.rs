@@ -497,6 +497,8 @@ pub struct UIPreferences {
     pub custom_instructions: String,
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
+    #[serde(default)]
+    pub sidebar_width: u16,
 }
 
 #[allow(dead_code)]

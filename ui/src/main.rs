@@ -19,7 +19,8 @@ use iced::widget::{
 };
 use iced::{
     Alignment, Background, Border, Color, ContentFit, Element, Event, Fill, Length, Padding, Shadow,
-    Size, Subscription, Task, Theme, Vector, clipboard, event, keyboard, system, task, time, window,
+    Size, Subscription, Task, Theme, Vector, clipboard, event, keyboard, mouse, system, task, time,
+    window,
 };
 use icons::{Icon, sparkle_color};
 use ipc::{
@@ -40,6 +41,10 @@ const CHAT_SCROLL_ID: &str = "chat_scroll";
 const SEARCH_INPUT_ID: &str = "search_modal_input";
 pub(crate) const WELCOME_MAX_WIDTH: f32 = 660.0;
 pub(crate) const CONTENT_MAX_WIDTH: f32 = 760.0;
+pub(crate) const SIDEBAR_DEFAULT_WIDTH: f32 = 284.0;
+pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 220.0;
+pub(crate) const SIDEBAR_MAX_WIDTH: f32 = 480.0;
+const SIDEBAR_MAIN_MIN_RESERVE: f32 = 360.0;
 
 // 기능 모드 코드 (서버 채팅 옵션 연동)
 pub(crate) const FEATURE_MODE_DEEP_RESEARCH: i32 = 1;
@@ -265,6 +270,11 @@ pub(crate) struct App {
 
     // 내비게이션 · 사이드바 · 팝오버 · 모달
     sidebar_open: bool,
+    pub(crate) sidebar_width: f32,
+    sidebar_resizing: bool,
+    sidebar_resize_hovered: bool,
+    sidebar_resize_start_width: Option<f32>,
+    window_width: f32,
     pub(crate) active_section: ActiveSection,
     pub(crate) more_menu_open: bool,
     pub(crate) filter_menu_open: bool,
@@ -424,6 +434,10 @@ pub(crate) enum Message {
 
     // 사이드바 · 내비게이션 · 필터 · 팝오버
     ToggleSidebar,
+    StartSidebarResize,
+    SidebarResizeHover(bool),
+    ResetSidebarWidth,
+    SidebarResizeEvent(Event),
     SwitchSection(ActiveSection),
     ToggleMoreMenu,
     CloseMoreMenu,
@@ -614,6 +628,11 @@ impl App {
             folder_input_draft: String::new(),
             usage_info: None,
             sidebar_open: true,
+            sidebar_width: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_resizing: false,
+            sidebar_resize_hovered: false,
+            sidebar_resize_start_width: None,
+            window_width: 1240.0,
             active_section: ActiveSection::Chat,
             more_menu_open: false,
             filter_menu_open: false,
@@ -922,7 +941,8 @@ impl App {
                     Event::Window(
                         window::Event::FileHovered(_)
                         | window::Event::FilesHoveredLeft
-                        | window::Event::FileDropped(_),
+                        | window::Event::FileDropped(_)
+                        | window::Event::Resized(_),
                     ) => true,
                     Event::Keyboard(keyboard::Event::KeyPressed {
                         key, modifiers, ..
@@ -947,6 +967,24 @@ impl App {
             }),
             Subscription::run(ipc::stream_remote_events).map(Message::RemoteEventReceived),
         ];
+
+        // 사이드바 구분선 드래그 중일 때만 커서 이동/해제 이벤트를 구독해 평소 유휴 리드로우를 0으로 유지한다.
+        if self.sidebar_resizing {
+            subs.push(event::listen_with(|ev, _status, _id| {
+                let interested = matches!(
+                    ev,
+                    Event::Mouse(
+                        mouse::Event::CursorMoved { .. }
+                            | mouse::Event::ButtonReleased(mouse::Button::Left)
+                    ) | Event::Window(window::Event::Unfocused)
+                );
+                if interested {
+                    Some(Message::SidebarResizeEvent(ev))
+                } else {
+                    None
+                }
+            }));
+        }
 
         // 녹음 중이거나 토스트 표시 중일 때만 1초 타이머를 구동해 유휴 리드로우를 0으로 줄인다.
         if self.voice_recorder.is_some() || self.toast.is_some() {
@@ -1172,6 +1210,11 @@ impl App {
                 Task::none()
             }
             Message::RuntimeEvent(ev) => match ev {
+                Event::Window(window::Event::Resized(size)) => {
+                    self.window_width = size.width;
+                    self.sidebar_width = clamp_sidebar_width(self.sidebar_width, self.window_width);
+                    Task::none()
+                }
                 Event::Window(window::Event::FileHovered(_)) => {
                     self.file_hovering = true;
                     Task::none()
@@ -1557,6 +1600,10 @@ impl App {
                 self.personal_intelligence = prefs.personal_intelligence;
                 self.custom_instructions_draft = prefs.custom_instructions;
                 self.close_to_tray = prefs.close_to_tray;
+                if prefs.sidebar_width > 0 {
+                    self.sidebar_width =
+                        clamp_sidebar_width(prefs.sidebar_width as f32, self.window_width);
+                }
                 Task::none()
             }
             Message::PreferencesLoaded(Err(_)) => Task::none(),
@@ -1599,8 +1646,65 @@ impl App {
             }
             Message::ToggleSidebar => {
                 self.sidebar_open = !self.sidebar_open;
+                if !self.sidebar_open {
+                    self.sidebar_resizing = false;
+                    self.sidebar_resize_hovered = false;
+                    self.sidebar_resize_start_width = None;
+                }
                 Task::none()
             }
+            Message::StartSidebarResize => {
+                if self.sidebar_open {
+                    self.sidebar_resizing = true;
+                    self.sidebar_resize_start_width = Some(self.sidebar_width);
+                }
+                Task::none()
+            }
+            Message::SidebarResizeHover(hovered) => {
+                self.sidebar_resize_hovered = hovered;
+                Task::none()
+            }
+            Message::ResetSidebarWidth => {
+                self.sidebar_resizing = false;
+                self.sidebar_resize_start_width = None;
+                let next = clamp_sidebar_width(SIDEBAR_DEFAULT_WIDTH, self.window_width);
+                if (self.sidebar_width - next).abs() < 0.5 {
+                    return Task::none();
+                }
+                self.sidebar_width = next;
+                Task::perform(
+                    ipc::save_preferences(serde_json::json!({ "sidebar_width": next.round() as i32 })),
+                    Message::PreferencesSaved,
+                )
+            }
+            Message::SidebarResizeEvent(ev) => match ev {
+                Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                    if self.sidebar_resizing {
+                        let next = clamp_sidebar_width(position.x, self.window_width);
+                        if (self.sidebar_width - next).abs() >= 1.0 {
+                            self.sidebar_width = next;
+                        }
+                    }
+                    Task::none()
+                }
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                | Event::Window(window::Event::Unfocused) => {
+                    if !self.sidebar_resizing {
+                        return Task::none();
+                    }
+                    self.sidebar_resizing = false;
+                    let start = self.sidebar_resize_start_width.take();
+                    if start.is_some_and(|w| (self.sidebar_width - w).abs() < 1.0) {
+                        return Task::none();
+                    }
+                    let saved_w = self.sidebar_width.round() as i32;
+                    Task::perform(
+                        ipc::save_preferences(serde_json::json!({ "sidebar_width": saved_w })),
+                        Message::PreferencesSaved,
+                    )
+                }
+                _ => Task::none(),
+            },
             Message::SwitchSection(sec) => {
                 self.model_menu_open = false;
                 self.thinking_submenu_open = false;
@@ -3496,13 +3600,46 @@ impl App {
         let mut root_row = row![].width(Fill).height(Fill);
         if self.sidebar_open {
             let border_subtle = self.palette.border_subtle;
-            let divider = container(space::vertical().height(Fill))
-                .width(Length::Fixed(1.0))
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(border_subtle)),
-                    ..container::Style::default()
-                });
-            root_row = root_row.push(self.view_sidebar()).push(divider);
+            let accent = self.palette.accent;
+            let bg_sidebar = self.palette.bg_sidebar;
+            let bg_canvas = self.palette.bg_canvas;
+            let active_line = self.sidebar_resizing || self.sidebar_resize_hovered;
+            let line_color = if active_line { accent } else { border_subtle };
+            let line_width = if active_line { 2.0 } else { 1.0 };
+            let right_pad = if active_line { 2.0 } else { 3.0 };
+
+            // 평소에는 1px 구분선으로 보이되 6px 히트 영역을 확보해 드래그로 사이드바 폭을 조절할 수 있게 한다.
+            let handle_visual = row![
+                container(space::vertical().height(Fill))
+                    .width(Length::Fixed(2.0))
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(bg_sidebar)),
+                        ..container::Style::default()
+                    }),
+                container(space::vertical().height(Fill))
+                    .width(Length::Fixed(line_width))
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(line_color)),
+                        ..container::Style::default()
+                    }),
+                container(space::vertical().height(Fill))
+                    .width(Length::Fixed(right_pad))
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(bg_canvas)),
+                        ..container::Style::default()
+                    }),
+            ]
+            .width(Length::Fixed(6.0))
+            .height(Fill);
+
+            let resize_handle = mouse_area(handle_visual)
+                .on_press(Message::StartSidebarResize)
+                .on_double_click(Message::ResetSidebarWidth)
+                .on_enter(Message::SidebarResizeHover(true))
+                .on_exit(Message::SidebarResizeHover(false))
+                .interaction(mouse::Interaction::ResizingHorizontally);
+
+            root_row = root_row.push(self.view_sidebar()).push(resize_handle);
         }
         root_row = root_row.push(self.view_main());
 
@@ -3702,7 +3839,10 @@ impl App {
             let nb_id = nb.id.clone();
             let active = self.active_section == ActiveSection::Notebooks
                 && self.editing_notebook.id == nb.id;
-            let title = truncate_single_line(t(loc, &nb.title), 24);
+            let title = truncate_single_line(
+                t(loc, &nb.title),
+                sidebar_text_units(self.sidebar_width, 24),
+            );
             nb_col = nb_col.push(
                 button(
                     row![
@@ -3958,7 +4098,10 @@ impl App {
             row![
                 avatar_el,
                 column![
-                    text(truncate_single_line(display_name, 18))
+                    text(truncate_single_line(
+                        display_name,
+                        sidebar_text_units(self.sidebar_width, 18),
+                    ))
                         .size(13.5)
                         .font(font_medium())
                         .color(text_strong)
@@ -4016,7 +4159,9 @@ impl App {
                     left: 10.0,
                 }),
         )
-        .width(Length::Fixed(284.0))
+        .width(Length::Fixed(
+            (self.sidebar_width - 2.0).max(SIDEBAR_MIN_WIDTH - 2.0),
+        ))
         .height(Fill)
         .style(move |_| container::Style {
             background: Some(Background::Color(bg_sidebar)),
@@ -4088,14 +4233,15 @@ impl App {
             c.title.as_str()
         };
         let has_right_badge = c.pinned || c.has_unread;
-        let max_chars = if is_active || is_menu_target {
+        let base_units = if is_active || is_menu_target {
             24
         } else if has_right_badge {
             25
         } else {
             28
         };
-        let display_title = truncate_single_line(raw_title, max_chars);
+        let display_title =
+            truncate_single_line(raw_title, sidebar_text_units(self.sidebar_width, base_units));
 
         let mut btn_content = row![
             text(display_title)
@@ -7668,6 +7814,24 @@ fn border_subtle_or(c: Color) -> Color {
     c
 }
 
+/// 사이드바 폭을 최소·최대 한계 및 현재 창 폭의 본문 확보 여백에 맞춰 클램프한다.
+fn clamp_sidebar_width(desired: f32, window_width: f32) -> f32 {
+    let max_w = if window_width > 0.0 {
+        (window_width - SIDEBAR_MAIN_MIN_RESERVE).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+    } else {
+        SIDEBAR_MAX_WIDTH
+    };
+    desired.round().clamp(SIDEBAR_MIN_WIDTH, max_w)
+}
+
+/// 현재 사이드바 폭에 비례해 단일 줄 말줄임 허용 단위(ASCII=1, 비ASCII=2)를 계산한다.
+fn sidebar_text_units(sidebar_width: f32, base_units: usize) -> usize {
+    let delta_px = sidebar_width - SIDEBAR_DEFAULT_WIDTH;
+    ((base_units as f32) + delta_px / 7.5)
+        .round()
+        .clamp(12.0, 96.0) as usize
+}
+
 /// 사이드바 대화 제목을 단일 줄 표시 폭에 맞게 말줄임(`…`) 처리한다.
 pub(crate) fn truncate_single_line(s: &str, max_units: usize) -> String {
     let single = s.replace(['\n', '\r'], " ");
@@ -8022,9 +8186,23 @@ fn watch_omarchy_theme() -> impl iced::futures::Stream<Item = String> {
 #[cfg(test)]
 mod url_safety_tests {
     use super::{
-        ChatMessage, Locale, civil_from_days, format_turn_timestamp, is_safe_external_url,
-        parse_tz_offset_hhmm,
+        ChatMessage, Locale, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+        civil_from_days, clamp_sidebar_width, format_turn_timestamp, is_safe_external_url,
+        parse_tz_offset_hhmm, sidebar_text_units,
     };
+
+    #[test]
+    fn 사이드바_폭_클램프와_동적_말줄임_계산() {
+        assert_eq!(clamp_sidebar_width(120.0, 1240.0), SIDEBAR_MIN_WIDTH);
+        assert_eq!(clamp_sidebar_width(600.0, 1240.0), SIDEBAR_MAX_WIDTH);
+        assert_eq!(clamp_sidebar_width(340.4, 1240.0), 340.0);
+        // 좁은 창(660px)에서는 본문 최소폭(360px)을 보장하기 위해 300px까지만 허용된다.
+        assert_eq!(clamp_sidebar_width(420.0, 660.0), 300.0);
+
+        assert_eq!(sidebar_text_units(SIDEBAR_DEFAULT_WIDTH, 28), 28);
+        assert!(sidebar_text_units(420.0, 28) > 40);
+        assert!(sidebar_text_units(SIDEBAR_MIN_WIDTH, 28) < 28);
+    }
 
     #[test]
     fn 경량_sse_빈_full_text_증분_누적() {
