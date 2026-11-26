@@ -9,6 +9,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,9 +25,13 @@ const (
 	bridgeServerName             = "gemini-remote"
 	bridgeServerVersion          = "1.3.0"
 
-	// Antigravity 등 MCP 클라이언트의 기본 3분(180초) 도구 호출 타임아웃보다 여유 있게 반환하고
-	// 중간 진행 상황을 주기적으로 중계할 수 있도록 기본 대기 시간을 60초로 둔다.
-	bridgeDefaultWaitDuration        = 60 * time.Second
+	// 첫 gemini_remote_run은 10~15초 사이 첫 진행 브리핑을 빠르게 띄우고,
+	// 후속 gemini_remote_wait는 변화가 있을 때 25초, 변화가 없을 때 최대 50초까지 대기해
+	// agy 턴 소모를 억제하면서 3분 MCP 타임아웃을 안전하게 회피한다.
+	bridgeDefaultRunWaitDuration     = 15 * time.Second
+	bridgeRunEarlyReturnMinWait      = 10 * time.Second
+	bridgeDefaultWaitDuration        = 25 * time.Second
+	bridgeWaitIdleMaxDuration        = 50 * time.Second
 	bridgeMaxWaitDuration            = 150 * time.Second
 	bridgeMaxCompletedJobs           = 64
 	bridgeDefaultRecoveryInterval    = 10 * time.Second
@@ -34,6 +40,8 @@ const (
 	bridgeDefaultRecoveryMaxWait     = 2 * time.Hour
 	bridgeDefaultRecoverySettleDelay = 6 * time.Second
 	bridgeProgressThrottle           = 1500 * time.Millisecond
+	bridgeLiveStatusThrottle         = 1 * time.Second
+	bridgeLiveStatusHeartbeat        = 15 * time.Second
 )
 
 // BridgeBackend abstracts the RobinService operations used by the MCP bridge server.
@@ -97,30 +105,36 @@ type daemonToolEvent struct {
 }
 
 type bridgeJob struct {
-	mu              sync.Mutex
-	id              string
-	startedAt       time.Time
-	lastActivityAt  time.Time
-	finishedAt      time.Time
-	status          bridgeJobStatus
-	phase           string
-	agentTask       bool
-	conversationID  string
-	modelAttr       string
-	targetDevice    string
-	statusText      string
-	liveTool        string
-	thoughts        strings.Builder
-	streamedText    strings.Builder
-	seenTools       map[string]int
-	activities      []proto.RemoteToolActivity
-	lastProgressMsg string
-	progressSeq     uint64
-	progressSubs    map[uint64]chan progressUpdate
-	finalResult     bridgeToolCallResult
-	errText         string
-	done            chan struct{}
-	cancel          context.CancelFunc
+	mu               sync.Mutex
+	id               string
+	clientConvID     string
+	startedAt        time.Time
+	lastActivityAt   time.Time
+	finishedAt       time.Time
+	status           bridgeJobStatus
+	phase            string
+	agentTask        bool
+	conversationID   string
+	modelAttr        string
+	targetDevice     string
+	statusText       string
+	liveTool         string
+	lastTool         string
+	daemonMCPDetails []string
+	thoughts         strings.Builder
+	streamedText     strings.Builder
+	seenTools        map[string]int
+	activities       []proto.RemoteToolActivity
+	lastProgressMsg  string
+	lastSnapshotKey  string
+	progressEmitSeq  int
+	progressSeq      uint64
+	progressSubs     map[uint64]chan progressUpdate
+	onLiveUpdate     func(force bool)
+	finalResult      bridgeToolCallResult
+	errText          string
+	done             chan struct{}
+	cancel           context.CancelFunc
 }
 
 func formatActivity(a proto.RemoteToolActivity) string {
@@ -174,8 +188,9 @@ func (j *bridgeJob) emitProgressLocked(msg string) {
 		return
 	}
 	j.lastProgressMsg = msg
+	j.progressEmitSeq++
 	upd := progressUpdate{
-		Progress: len(j.activities),
+		Progress: j.progressEmitSeq,
 		Message:  msg,
 	}
 	for _, ch := range j.progressSubs {
@@ -192,6 +207,55 @@ func (j *bridgeJob) emitProgressLocked(msg string) {
 			}
 		}
 	}
+	if j.onLiveUpdate != nil {
+		j.onLiveUpdate(j.progressEmitSeq == 1)
+	}
+}
+
+func (j *bridgeJob) hasBriefingLocked() bool {
+	return strings.TrimSpace(j.statusText) != "" ||
+		strings.TrimSpace(j.liveTool) != "" ||
+		strings.TrimSpace(j.lastTool) != "" ||
+		len(j.activities) > 0
+}
+
+func (j *bridgeJob) briefingKeyLocked() string {
+	lastAct := ""
+	if n := len(j.activities); n > 0 {
+		lastAct = formatActivity(j.activities[n-1])
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%d|%s",
+		j.phase,
+		strings.TrimSpace(j.statusText),
+		strings.TrimSpace(j.liveTool),
+		strings.TrimSpace(j.lastTool),
+		len(j.activities),
+		lastAct,
+	)
+}
+
+func (j *bridgeJob) liveSummaryLocked() string {
+	if s := strings.TrimSpace(j.liveTool); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(j.statusText); s != "" {
+		return s
+	}
+	if n := len(j.activities); n > 0 {
+		if s := formatActivity(j.activities[n-1]); s != "" {
+			return s
+		}
+	}
+	if s := strings.TrimSpace(j.lastTool); s != "" {
+		return s
+	}
+	if s := tailRunes(j.thoughts.String(), 80); s != "" {
+		return "사고 중: " + s
+	}
+	if j.phase == "recovering" {
+		return "원격 응답 회수 중"
+	}
+	return "원격 작업 실행 중"
 }
 
 func (j *bridgeJob) appendActivitiesLocked(acts []proto.RemoteToolActivity) bool {
@@ -225,12 +289,33 @@ func (j *bridgeJob) appendActivitiesLocked(acts []proto.RemoteToolActivity) bool
 		changed = true
 	}
 	if changed {
+		j.enrichMCPActivitiesLocked()
 		j.lastActivityAt = time.Now()
 		if len(j.activities) > 0 {
 			j.emitProgressLocked(formatActivity(j.activities[len(j.activities)-1]))
 		}
 	}
 	return changed
+}
+
+// enrichMCPActivitiesLocked는 서버가 상세 설명 없이 "Running MCP tool"로만 보고한 항목에
+// 로컬 데몬 SSE에서 수집한 구체 MCP 도구명(예: git/git_show)을 순서대로 매칭해 보강한다.
+func (j *bridgeJob) enrichMCPActivitiesLocked() {
+	if len(j.daemonMCPDetails) == 0 {
+		return
+	}
+	detailIdx := 0
+	for i := range j.activities {
+		if j.activities[i].Name != "Running MCP tool" {
+			continue
+		}
+		if detailIdx < len(j.daemonMCPDetails) {
+			if j.activities[i].Explanation == "" && j.activities[i].Summary == "" {
+				j.activities[i].Summary = j.daemonMCPDetails[detailIdx]
+			}
+			detailIdx++
+		}
+	}
 }
 
 func (j *bridgeJob) recordDaemonEventLocked(ev daemonToolEvent) {
@@ -245,11 +330,21 @@ func (j *bridgeJob) recordDaemonEventLocked(ev daemonToolEvent) {
 			label = fmt.Sprintf("%s: %s", ev.ToolName, ev.ArgsBrief)
 		}
 		j.liveTool = label
+		j.lastTool = label
+		if ev.ToolName == "execute_mcp" && ev.ArgsBrief != "" {
+			j.daemonMCPDetails = append(j.daemonMCPDetails, ev.ArgsBrief)
+			j.enrichMCPActivitiesLocked()
+		}
 		j.lastActivityAt = now
 		j.emitProgressLocked("실행 중: " + label)
 	case "finished", "error":
 		if ev.ToolName == "" || ev.ToolName == "list_mcp" || ev.ToolName == "remote_session" {
 			return
+		}
+		if ev.ArgsBrief != "" {
+			j.lastTool = fmt.Sprintf("%s: %s", ev.ToolName, ev.ArgsBrief)
+		} else {
+			j.lastTool = ev.ToolName
 		}
 		j.liveTool = ""
 		j.lastActivityAt = now
@@ -269,6 +364,8 @@ func (j *bridgeJob) recordDaemonEventLocked(ev daemonToolEvent) {
 func (j *bridgeJob) snapshotRunning(now time.Time) bridgeToolCallResult {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.enrichMCPActivitiesLocked()
+	j.lastSnapshotKey = j.briefingKeyLocked()
 
 	elapsed := int(now.Sub(j.startedAt).Seconds())
 	if elapsed < 0 {
@@ -317,6 +414,9 @@ func (j *bridgeJob) snapshotRunning(now time.Time) bridgeToolCallResult {
 	if j.liveTool != "" {
 		payload["live_tool"] = j.liveTool
 	}
+	if j.lastTool != "" && j.lastTool != j.liveTool {
+		payload["last_tool"] = j.lastTool
+	}
 	if thoughtsTail := tailRunes(j.thoughts.String(), 400); thoughtsTail != "" {
 		payload["thoughts_tail"] = thoughtsTail
 	}
@@ -327,13 +427,26 @@ func (j *bridgeJob) snapshotRunning(now time.Time) bridgeToolCallResult {
 	return bridgeTextResult(string(b))
 }
 
+type liveStatusSnapshot struct {
+	ClientConvID string
+	JobID        string
+	StartedAt    time.Time
+	UpdatedAt    time.Time
+	Phase        string
+	Summary      string
+	ToolsCount   int
+}
+
 // BridgeServer is a stdio JSON-RPC 2.0 MCP server delegating to gemini-remote.
 type BridgeServer struct {
 	backend              BridgeBackend
 	loadConfig           func() (*config.Config, error)
 	writeMu              sync.Mutex
 	logLevel             atomic.Int32 // 0=disabled, 1=debug, 2=info, 3=notice, 4=warning, 5=error
+	defaultRunWait       time.Duration
+	runEarlyMinWait      time.Duration
 	defaultWait          time.Duration
+	waitIdleMax          time.Duration
 	recoveryPollInterval time.Duration
 	recoveryIdleTimeout  time.Duration
 	recoveryMaxWait      time.Duration
@@ -344,10 +457,36 @@ type BridgeServer struct {
 	daemonHTTP           *http.Client
 	subscribeHints       func(ctx context.Context, convID string) (<-chan struct{}, func())
 
+	liveStatusMu       sync.Mutex
+	liveStatusDir      string
+	liveStatusLastSent map[string]time.Time
+	liveStatusLastBody map[string]string
+
 	jobsMu   sync.Mutex
 	jobs     map[string]*bridgeJob
 	jobOrder []string
 	jobSeq   atomic.Uint64
+}
+
+// DefaultLiveStatusDir는 상태줄·외부 도구가 읽는 실시간 원격 작업 상태 파일 디렉터리를 반환한다.
+func DefaultLiveStatusDir() string {
+	if base := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); base != "" {
+		return filepath.Join(base, "gemini-remote")
+	}
+	if base, err := os.UserCacheDir(); err == nil && strings.TrimSpace(base) != "" {
+		return filepath.Join(base, "gemini-remote")
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".cache", "gemini-remote")
+	}
+	return ""
+}
+
+// SetLiveStatusDir는 실시간 상태 파일 기록 디렉터리를 설정한다(빈 문자열이면 비활성).
+func (s *BridgeServer) SetLiveStatusDir(dir string) {
+	s.liveStatusMu.Lock()
+	s.liveStatusDir = strings.TrimSpace(dir)
+	s.liveStatusMu.Unlock()
 }
 
 // NewBridgeServer creates an MCP BridgeServer backed by the given BridgeBackend and config loader.
@@ -359,12 +498,16 @@ func NewBridgeServer(backend BridgeBackend, loadConfig func() (*config.Config, e
 	return &BridgeServer{
 		backend:              backend,
 		loadConfig:           loadConfig,
+		runEarlyMinWait:      bridgeRunEarlyReturnMinWait,
 		defaultWait:          bridgeDefaultWaitDuration,
+		waitIdleMax:          bridgeWaitIdleMaxDuration,
 		recoveryPollInterval: bridgeDefaultRecoveryInterval,
 		recoveryIdleTimeout:  bridgeDefaultRecoveryIdleTimeout,
 		recoveryMaxWait:      bridgeDefaultRecoveryMaxWait,
 		recoverySettleDelay:  bridgeDefaultRecoverySettleDelay,
 		daemonSocketPath:     sockPath,
+		liveStatusLastSent:   make(map[string]time.Time),
+		liveStatusLastBody:   make(map[string]string),
 		jobs:                 make(map[string]*bridgeJob),
 	}
 }
@@ -401,7 +544,8 @@ type bridgeToolDef struct {
 }
 
 type bridgeToolCallMeta struct {
-	ProgressToken json.RawMessage `json:"progressToken,omitempty"`
+	ProgressToken  json.RawMessage `json:"progressToken,omitempty"`
+	ConversationID string          `json:"antigravity.google/conversation_id,omitempty"`
 }
 
 type bridgeToolCallParams struct {
@@ -655,7 +799,7 @@ func (s *BridgeServer) toolDefinitions() []bridgeToolDef {
 	return []bridgeToolDef{
 		{
 			Name:        "gemini_remote_run",
-			Description: "Delegate a task or prompt to the Gemini remote-PC agent/MCP quota. Waits up to wait_seconds (default 60s, max 150s) and automatically returns status='running' with progress (status_text, live_tool, thoughts_tail, recent_tools) and a job_id before MCP client timeouts; continue awaiting with gemini_remote_wait.",
+			Description: "Delegate a task or prompt to the Gemini remote-PC agent/MCP quota. Uses adaptive inline wait (default 10-15s for the first briefing, or explicit wait_seconds up to 150s) and returns status='running' with progress (status_text, live_tool, last_tool, thoughts_tail, recent_tools) and a job_id before MCP client timeouts; continue awaiting with gemini_remote_wait.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -697,7 +841,7 @@ func (s *BridgeServer) toolDefinitions() []bridgeToolDef {
 						"type":        "integer",
 						"minimum":     0,
 						"maximum":     150,
-						"description": "Max seconds to wait inline before returning a running job_id (default 60, 0 = detach immediately, max 150).",
+						"description": "Optional fixed seconds to wait inline before returning a running job_id (omit for adaptive 10-15s first briefing, 0 = detach immediately, max 150).",
 					},
 				},
 				"required": []string{"prompt"},
@@ -705,7 +849,7 @@ func (s *BridgeServer) toolDefinitions() []bridgeToolDef {
 		},
 		{
 			Name:        "gemini_remote_wait",
-			Description: "Wait for a background gemini_remote_run job to finish (up to wait_seconds, default 60s, max 150s). Returns the final response when done, or status='running' with status_text, live_tool, thoughts_tail, and recent_tools so you can relay progress and call wait again.",
+			Description: "Wait for a background gemini_remote_run job to finish. Uses adaptive wait (25s when progress changed, up to 50s when idle and returning immediately on new progress, or explicit wait_seconds up to 150s). Returns the final response when done, or status='running' with status_text, live_tool, last_tool, thoughts_tail, and recent_tools.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -717,7 +861,7 @@ func (s *BridgeServer) toolDefinitions() []bridgeToolDef {
 						"type":        "integer",
 						"minimum":     0,
 						"maximum":     150,
-						"description": "Max seconds to block waiting for completion (default 60, 0 = status check only, max 150).",
+						"description": "Optional fixed seconds to block waiting for completion (omit for adaptive 25-50s wait, 0 = status check only, max 150).",
 					},
 				},
 				"required": []string{"job_id"},
@@ -787,12 +931,16 @@ func bridgeErrorResult(err error) bridgeToolCallResult {
 
 func (s *BridgeServer) callTool(ctx context.Context, params bridgeToolCallParams, notify func(method string, params any)) bridgeToolCallResult {
 	var progressToken json.RawMessage
-	if params.Meta != nil && len(params.Meta.ProgressToken) > 0 && string(params.Meta.ProgressToken) != "null" {
-		progressToken = params.Meta.ProgressToken
+	clientConvID := ""
+	if params.Meta != nil {
+		if len(params.Meta.ProgressToken) > 0 && string(params.Meta.ProgressToken) != "null" {
+			progressToken = params.Meta.ProgressToken
+		}
+		clientConvID = sanitizeLiveID(params.Meta.ConversationID)
 	}
 	switch params.Name {
 	case "gemini_remote_run":
-		return s.handleRun(ctx, params.Arguments, progressToken, notify)
+		return s.handleRun(ctx, params.Arguments, progressToken, clientConvID, notify)
 	case "gemini_remote_wait":
 		return s.handleWait(ctx, params.Arguments, progressToken, notify)
 	case "gemini_remote_cancel":
@@ -831,14 +979,13 @@ type bridgeCancelArgs struct {
 	JobID string `json:"job_id"`
 }
 
-func (s *BridgeServer) resolveWaitDuration(waitSeconds *int) time.Duration {
-	if waitSeconds == nil {
-		if s.defaultWait > 0 {
-			return s.defaultWait
-		}
-		return bridgeDefaultWaitDuration
-	}
-	sec := *waitSeconds
+type waitPolicy struct {
+	baseWait     time.Duration
+	earlyMinWait time.Duration
+	idleMaxWait  time.Duration
+}
+
+func clampWaitSeconds(sec int) time.Duration {
 	if sec <= 0 {
 		return 0
 	}
@@ -849,16 +996,234 @@ func (s *BridgeServer) resolveWaitDuration(waitSeconds *int) time.Duration {
 	return d
 }
 
-func (s *BridgeServer) cancelAllJobs() {
+func (s *BridgeServer) resolveRunWaitPolicy(waitSeconds *int) waitPolicy {
+	if waitSeconds != nil {
+		return waitPolicy{baseWait: clampWaitSeconds(*waitSeconds)}
+	}
+	if s.defaultRunWait > 0 {
+		early := s.runEarlyMinWait
+		if early >= s.defaultRunWait {
+			early = 0
+		}
+		return waitPolicy{baseWait: s.defaultRunWait, earlyMinWait: early}
+	}
+	// 테스트 등에서 defaultWait만 직접 오버라이드한 경우 고정 대기로 하위 호환을 유지한다.
+	if s.defaultWait > 0 && s.defaultWait != bridgeDefaultWaitDuration {
+		return waitPolicy{baseWait: s.defaultWait}
+	}
+	early := s.runEarlyMinWait
+	if early >= bridgeDefaultRunWaitDuration {
+		early = 0
+	}
+	return waitPolicy{
+		baseWait:     bridgeDefaultRunWaitDuration,
+		earlyMinWait: early,
+	}
+}
+
+func (s *BridgeServer) resolveWaitPolicy(waitSeconds *int) waitPolicy {
+	if waitSeconds != nil {
+		return waitPolicy{baseWait: clampWaitSeconds(*waitSeconds)}
+	}
+	base := s.defaultWait
+	if base <= 0 {
+		base = bridgeDefaultWaitDuration
+	}
+	if base != bridgeDefaultWaitDuration && s.waitIdleMax == bridgeWaitIdleMaxDuration {
+		return waitPolicy{baseWait: base}
+	}
+	idleMax := s.waitIdleMax
+	if idleMax <= base {
+		idleMax = 0
+	}
+	return waitPolicy{
+		baseWait:    base,
+		idleMaxWait: idleMax,
+	}
+}
+
+func sanitizeLiveID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < len(raw) && b.Len() < 80; i++ {
+		c := raw[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func sanitizeSingleLine(s string, maxRunes int) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := true
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		if r == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+			b.WriteByte(' ')
+			continue
+		}
+		prevSpace = false
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if maxRunes <= 0 {
+		return out
+	}
+	runes := []rune(out)
+	if len(runes) <= maxRunes {
+		return out
+	}
+	if maxRunes <= 1 {
+		return "…"
+	}
+	return strings.TrimSpace(string(runes[:maxRunes-1])) + "…"
+}
+
+func (s *BridgeServer) liveStatusFilePathLocked(clientConvID string) string {
+	if s.liveStatusDir == "" {
+		return ""
+	}
+	if id := sanitizeLiveID(clientConvID); id != "" {
+		return filepath.Join(s.liveStatusDir, "mcp-live-status-"+id+".txt")
+	}
+	return filepath.Join(s.liveStatusDir, "mcp-live-status.txt")
+}
+
+func (s *BridgeServer) writeLiveStatusSnapshot(snap liveStatusSnapshot, force bool) {
+	s.liveStatusMu.Lock()
+	defer s.liveStatusMu.Unlock()
+	if s.liveStatusDir == "" {
+		return
+	}
+	path := s.liveStatusFilePathLocked(snap.ClientConvID)
+	if path == "" {
+		return
+	}
+	now := snap.UpdatedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	body := fmt.Sprintf("%d\n%d\n%s\n%s\n%d\n%s\n%s\n",
+		now.Unix(),
+		snap.StartedAt.Unix(),
+		sanitizeSingleLine(snap.Phase, 24),
+		sanitizeSingleLine(snap.Summary, 160),
+		snap.ToolsCount,
+		sanitizeSingleLine(snap.JobID, 40),
+		sanitizeLiveID(snap.ClientConvID),
+	)
+	if !force {
+		if lastSent, ok := s.liveStatusLastSent[path]; ok && now.Sub(lastSent) < bridgeLiveStatusThrottle {
+			return
+		}
+	}
+	if s.liveStatusLastBody[path] == body && !force {
+		return
+	}
+	if err := os.MkdirAll(s.liveStatusDir, 0o700); err != nil {
+		return
+	}
+	tmp := fmt.Sprintf("%s.%d.%d.tmp", path, os.Getpid(), now.UnixNano())
+	if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+	if s.liveStatusLastSent == nil {
+		s.liveStatusLastSent = make(map[string]time.Time)
+	}
+	if s.liveStatusLastBody == nil {
+		s.liveStatusLastBody = make(map[string]string)
+	}
+	s.liveStatusLastSent[path] = now
+	s.liveStatusLastBody[path] = body
+}
+
+func (s *BridgeServer) removeLiveStatusPath(clientConvID string) {
+	s.liveStatusMu.Lock()
+	defer s.liveStatusMu.Unlock()
+	path := s.liveStatusFilePathLocked(clientConvID)
+	if path == "" {
+		return
+	}
+	_ = os.Remove(path)
+	delete(s.liveStatusLastSent, path)
+	delete(s.liveStatusLastBody, path)
+}
+
+func (s *BridgeServer) syncLiveStatusAfterDone(clientConvID string) {
+	var replacement *liveStatusSnapshot
 	s.jobsMu.Lock()
-	defer s.jobsMu.Unlock()
+	for i := len(s.jobOrder) - 1; i >= 0; i-- {
+		j := s.jobs[s.jobOrder[i]]
+		if j == nil {
+			continue
+		}
+		j.mu.Lock()
+		if j.status == bridgeJobRunning && j.clientConvID == clientConvID {
+			snap := j.liveStatusSnapshotLocked(time.Now())
+			replacement = &snap
+			j.mu.Unlock()
+			break
+		}
+		j.mu.Unlock()
+	}
+	s.jobsMu.Unlock()
+
+	if replacement != nil {
+		s.writeLiveStatusSnapshot(*replacement, true)
+		return
+	}
+	s.removeLiveStatusPath(clientConvID)
+}
+
+func (j *bridgeJob) liveStatusSnapshotLocked(now time.Time) liveStatusSnapshot {
+	return liveStatusSnapshot{
+		ClientConvID: j.clientConvID,
+		JobID:        j.id,
+		StartedAt:    j.startedAt,
+		UpdatedAt:    now,
+		Phase:        j.phase,
+		Summary:      j.liveSummaryLocked(),
+		ToolsCount:   len(j.activities),
+	}
+}
+
+func (s *BridgeServer) cancelAllJobs() {
+	var convIDs []string
+	s.jobsMu.Lock()
 	for _, j := range s.jobs {
 		j.mu.Lock()
 		if j.status == bridgeJobRunning && j.cancel != nil {
 			j.status = bridgeJobCancelled
 			j.cancel()
+			convIDs = append(convIDs, j.clientConvID)
 		}
 		j.mu.Unlock()
+	}
+	s.jobsMu.Unlock()
+	for _, cid := range convIDs {
+		s.removeLiveStatusPath(cid)
 	}
 }
 
@@ -901,12 +1266,14 @@ func (s *BridgeServer) pruneJobsLocked() {
 	s.jobOrder = kept
 }
 
-func (s *BridgeServer) startJob(queryParams proto.ChatQueryParams, agentTask bool, deviceName string) *bridgeJob {
+func (s *BridgeServer) startJob(queryParams proto.ChatQueryParams, agentTask bool, deviceName, clientConvID string) *bridgeJob {
 	jobCtx, cancel := context.WithCancel(context.Background())
 	id := fmt.Sprintf("job_%d", s.jobSeq.Add(1))
 	now := time.Now()
+	cleanClientConvID := sanitizeLiveID(clientConvID)
 	job := &bridgeJob{
 		id:             id,
+		clientConvID:   cleanClientConvID,
 		startedAt:      now,
 		lastActivityAt: now,
 		status:         bridgeJobRunning,
@@ -919,6 +1286,10 @@ func (s *BridgeServer) startJob(queryParams proto.ChatQueryParams, agentTask boo
 		done:           make(chan struct{}),
 		cancel:         cancel,
 	}
+	job.onLiveUpdate = func(force bool) {
+		snap := job.liveStatusSnapshotLocked(time.Now())
+		s.writeLiveStatusSnapshot(snap, force)
+	}
 
 	s.jobsMu.Lock()
 	if s.jobs == nil {
@@ -928,9 +1299,41 @@ func (s *BridgeServer) startJob(queryParams proto.ChatQueryParams, agentTask boo
 	s.jobOrder = append(s.jobOrder, id)
 	s.jobsMu.Unlock()
 
+	job.mu.Lock()
+	initSnap := job.liveStatusSnapshotLocked(now)
+	job.mu.Unlock()
+	s.writeLiveStatusSnapshot(initSnap, true)
+
 	go func() {
 		defer cancel()
 		defer close(job.done)
+
+		// 장기 실행 중 상태줄의 stale 판정을 막기 위해 주기적으로 상태 파일 타임스탬프를 갱신한다.
+		hbStop := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(bridgeLiveStatusHeartbeat)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-hbStop:
+					return
+				case <-jobCtx.Done():
+					return
+				case tickNow := <-ticker.C:
+					job.mu.Lock()
+					running := job.status == bridgeJobRunning
+					var snap liveStatusSnapshot
+					if running {
+						snap = job.liveStatusSnapshotLocked(tickNow)
+					}
+					job.mu.Unlock()
+					if running {
+						s.writeLiveStatusSnapshot(snap, true)
+					}
+				}
+			}
+		}()
+		defer close(hbStop)
 
 		var (
 			liveHints <-chan struct{}
@@ -1057,6 +1460,9 @@ func (s *BridgeServer) startJob(queryParams proto.ChatQueryParams, agentTask boo
 			job.mu.Lock()
 			job.phase = "recovering"
 			job.lastActivityAt = time.Now()
+			if job.onLiveUpdate != nil {
+				job.onLiveUpdate(true)
+			}
 			job.mu.Unlock()
 
 			recBody, recErr := s.recoverAgentTurn(jobCtx, job, convID, queryParams.ParentRequestID, liveHints, &turnDone, &sseAlive)
@@ -1090,6 +1496,7 @@ func (s *BridgeServer) startJob(queryParams proto.ChatQueryParams, agentTask boo
 		s.jobsMu.Lock()
 		s.pruneJobsLocked()
 		s.jobsMu.Unlock()
+		s.syncLiveStatusAfterDone(cleanClientConvID)
 	}()
 
 	return job
@@ -1357,7 +1764,7 @@ func (s *BridgeServer) recoverAgentTurn(
 func (s *BridgeServer) waitForJob(
 	ctx context.Context,
 	job *bridgeJob,
-	wait time.Duration,
+	policy waitPolicy,
 	progressToken json.RawMessage,
 	notify func(method string, params any),
 ) bridgeToolCallResult {
@@ -1370,23 +1777,28 @@ func (s *BridgeServer) waitForJob(
 	default:
 	}
 
-	if wait <= 0 {
+	if policy.baseWait <= 0 {
 		return job.snapshotRunning(time.Now())
 	}
+
+	job.mu.Lock()
+	prevSnapKey := job.lastSnapshotKey
+	job.mu.Unlock()
 
 	var (
 		progCh   <-chan progressUpdate
 		lastSent time.Time
 	)
 	wantProgress := notify != nil && (len(progressToken) > 0 || s.infoLoggingEnabled())
-	if wantProgress {
+	needWatch := wantProgress || policy.earlyMinWait > 0 || policy.idleMaxWait > policy.baseWait
+	if needWatch {
 		subID, ch := job.subscribeProgress()
 		defer job.unsubscribeProgress(subID)
 		progCh = ch
 	}
 
 	sendUpdate := func(upd progressUpdate) {
-		if notify == nil || strings.TrimSpace(upd.Message) == "" {
+		if !wantProgress || strings.TrimSpace(upd.Message) == "" {
 			return
 		}
 		now := time.Now()
@@ -1410,8 +1822,43 @@ func (s *BridgeServer) waitForJob(
 		}
 	}
 
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
+	baseTimer := time.NewTimer(policy.baseWait)
+	defer baseTimer.Stop()
+
+	var (
+		earlyTimer   *time.Timer
+		earlyCh      <-chan time.Time
+		earlyReached bool
+	)
+	if policy.earlyMinWait > 0 && policy.earlyMinWait < policy.baseWait {
+		earlyTimer = time.NewTimer(policy.earlyMinWait)
+		defer earlyTimer.Stop()
+		earlyCh = earlyTimer.C
+	}
+
+	var (
+		idleExtTimer *time.Timer
+		idleExtCh    <-chan time.Time
+		inIdleExt    bool
+	)
+	defer func() {
+		if idleExtTimer != nil {
+			idleExtTimer.Stop()
+		}
+	}()
+
+	hasBriefing := func() bool {
+		job.mu.Lock()
+		ok := job.hasBriefingLocked()
+		job.mu.Unlock()
+		return ok
+	}
+	briefingChanged := func() bool {
+		job.mu.Lock()
+		changed := job.briefingKeyLocked() != prevSnapKey
+		job.mu.Unlock()
+		return changed
+	}
 
 	for {
 		select {
@@ -1422,7 +1869,27 @@ func (s *BridgeServer) waitForJob(
 			return res
 		case upd := <-progCh:
 			sendUpdate(upd)
-		case <-timer.C:
+			if earlyReached && hasBriefing() {
+				return job.snapshotRunning(time.Now())
+			}
+			if inIdleExt && briefingChanged() {
+				return job.snapshotRunning(time.Now())
+			}
+		case <-earlyCh:
+			earlyCh = nil
+			earlyReached = true
+			if hasBriefing() {
+				return job.snapshotRunning(time.Now())
+			}
+		case <-baseTimer.C:
+			if policy.idleMaxWait > policy.baseWait && !briefingChanged() {
+				inIdleExt = true
+				idleExtTimer = time.NewTimer(policy.idleMaxWait - policy.baseWait)
+				idleExtCh = idleExtTimer.C
+				continue
+			}
+			return job.snapshotRunning(time.Now())
+		case <-idleExtCh:
 			return job.snapshotRunning(time.Now())
 		case <-ctx.Done():
 			return job.snapshotRunning(time.Now())
@@ -1484,7 +1951,7 @@ func (s *BridgeServer) handleWait(ctx context.Context, rawArgs json.RawMessage, 
 	if job == nil {
 		return bridgeErrorResult(fmt.Errorf("작업을 찾을 수 없습니다: %s", jobID))
 	}
-	return s.waitForJob(ctx, job, s.resolveWaitDuration(args.WaitSeconds), progressToken, notify)
+	return s.waitForJob(ctx, job, s.resolveWaitPolicy(args.WaitSeconds), progressToken, notify)
 }
 
 func (s *BridgeServer) handleCancel(rawArgs json.RawMessage) bridgeToolCallResult {
@@ -1508,12 +1975,14 @@ func (s *BridgeServer) handleCancel(rawArgs json.RawMessage) bridgeToolCallResul
 
 	job.mu.Lock()
 	prev := job.status
+	clientConvID := job.clientConvID
 	if job.status == bridgeJobRunning && job.cancel != nil {
 		job.status = bridgeJobCancelled
 		job.cancel()
 	}
 	cur := job.status
 	job.mu.Unlock()
+	s.syncLiveStatusAfterDone(clientConvID)
 
 	b, _ := json.MarshalIndent(map[string]any{
 		"job_id":          jobID,
@@ -1523,7 +1992,7 @@ func (s *BridgeServer) handleCancel(rawArgs json.RawMessage) bridgeToolCallResul
 	return bridgeTextResult(string(b))
 }
 
-func (s *BridgeServer) handleRun(ctx context.Context, rawArgs json.RawMessage, progressToken json.RawMessage, notify func(method string, params any)) bridgeToolCallResult {
+func (s *BridgeServer) handleRun(ctx context.Context, rawArgs json.RawMessage, progressToken json.RawMessage, clientConvID string, notify func(method string, params any)) bridgeToolCallResult {
 	var args bridgeRunArgs
 	if len(rawArgs) > 0 {
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -1615,8 +2084,8 @@ func (s *BridgeServer) handleRun(ctx context.Context, rawArgs json.RawMessage, p
 		}
 	}
 
-	job := s.startJob(queryParams, agentTask, deviceName)
-	return s.waitForJob(ctx, job, s.resolveWaitDuration(args.WaitSeconds), progressToken, notify)
+	job := s.startJob(queryParams, agentTask, deviceName, clientConvID)
+	return s.waitForJob(ctx, job, s.resolveRunWaitPolicy(args.WaitSeconds), progressToken, notify)
 }
 
 func (s *BridgeServer) handleModels(ctx context.Context) bridgeToolCallResult {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -598,5 +600,272 @@ func TestBridgeServerProgressPayloadAndNotifications(t *testing.T) {
 	recent := payload["recent_tools"].([]any)
 	if len(recent) == 0 || !strings.Contains(recent[0].(string), "릴리즈 바이너리 빌드 및 로컬 설치 실행") {
 		t.Fatalf("recent_tools에 Explanation이 포함되지 않았습니다: %#v", recent)
+	}
+}
+
+func TestBridgeJobEnrichesRunningMCPToolsAndPreservesLastTool(t *testing.T) {
+	now := time.Now()
+	job := &bridgeJob{
+		id:             "job_mcp",
+		startedAt:      now.Add(-25 * time.Second),
+		lastActivityAt: now.Add(-5 * time.Second),
+		status:         bridgeJobRunning,
+		phase:          "streaming",
+		agentTask:      true,
+		conversationID: "c_mcp",
+		seenTools:      make(map[string]int),
+	}
+
+	job.mu.Lock()
+	job.recordDaemonEventLocked(daemonToolEvent{
+		SessionID: "c_mcp",
+		ToolName:  "execute_mcp",
+		ArgsBrief: "git/git_status",
+		Phase:     "started",
+	})
+	job.recordDaemonEventLocked(daemonToolEvent{
+		SessionID: "c_mcp",
+		ToolName:  "execute_mcp",
+		ArgsBrief: "git/git_status",
+		Phase:     "finished",
+	})
+	job.recordDaemonEventLocked(daemonToolEvent{
+		SessionID: "c_mcp",
+		ToolName:  "execute_mcp",
+		ArgsBrief: "git/git_show",
+		Phase:     "started",
+	})
+	job.recordDaemonEventLocked(daemonToolEvent{
+		SessionID: "c_mcp",
+		ToolName:  "execute_mcp",
+		ArgsBrief: "git/git_show",
+		Phase:     "finished",
+	})
+	job.appendActivitiesLocked([]proto.RemoteToolActivity{
+		{ID: "a1", Name: "Running MCP tool"},
+		{ID: "a2", Name: "Running MCP tool"},
+	})
+	job.mu.Unlock()
+
+	snap := job.snapshotRunning(now)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(snap.Content[0].Text), &payload); err != nil {
+		t.Fatalf("snapshot JSON 파싱 실패: %v", err)
+	}
+	if _, hasLive := payload["live_tool"]; hasLive {
+		t.Fatalf("종료 후 live_tool은 비어야 합니다: %#v", payload)
+	}
+	if payload["last_tool"] != "execute_mcp: git/git_show" {
+		t.Fatalf("last_tool 보존 실패: %#v", payload["last_tool"])
+	}
+	recent := payload["recent_tools"].([]any)
+	if len(recent) != 2 || recent[0] != "Running MCP tool(git/git_status)" || recent[1] != "Running MCP tool(git/git_show)" {
+		t.Fatalf("Running MCP tool 상세 보강 실패: %#v", recent)
+	}
+}
+
+func TestBridgeJobProgressEmitSeqMonotonicallyIncreases(t *testing.T) {
+	job := &bridgeJob{
+		id:        "job_seq",
+		status:    bridgeJobRunning,
+		seenTools: make(map[string]int),
+	}
+	subID, ch := job.subscribeProgress()
+	defer job.unsubscribeProgress(subID)
+
+	job.mu.Lock()
+	job.emitProgressLocked("단계 1: 파일 검색 중")
+	job.mu.Unlock()
+	u1 := <-ch
+
+	job.mu.Lock()
+	job.emitProgressLocked("단계 2: 결과 요약 중")
+	job.mu.Unlock()
+	u2 := <-ch
+
+	if u1.Progress != 1 || u2.Progress != 2 || u2.Progress <= u1.Progress {
+		t.Fatalf("progress 값이 단조 증가해야 합니다: u1=%+v u2=%+v", u1, u2)
+	}
+}
+
+func TestBridgeServerAdaptiveRunEarlyReturn(t *testing.T) {
+	release := make(chan struct{})
+	fb := &fakeBridgeBackend{
+		streamFn: func(ctx context.Context, _ proto.ChatQueryParams, onChunk func(proto.ChatStreamChunk) error) (*proto.ChatStreamChunk, error) {
+			time.Sleep(15 * time.Millisecond)
+			if onChunk != nil {
+				_ = onChunk(proto.ChatStreamChunk{
+					Type:           "data",
+					ConversationID: "c_early",
+					StatusText:     "원격 저장소 로그 확인 중",
+				})
+			}
+			select {
+			case <-release:
+				return &proto.ChatStreamChunk{Type: "done", Text: "완료", ConversationID: "c_early"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	srv := NewBridgeServer(fb, func() (*config.Config, error) { return &config.Config{DeviceID: "dev-1"}, nil })
+	srv.daemonSocketPath = ""
+	srv.defaultRunWait = 350 * time.Millisecond
+	srv.runEarlyMinWait = 40 * time.Millisecond
+
+	start := time.Now()
+	resp := runBridgeRPC(t, srv, `{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"gemini_remote_run","arguments":{"prompt":"조기 브리핑 테스트"}}}`)
+	elapsed := time.Since(start)
+	close(release)
+
+	if resp.Error != nil {
+		t.Fatalf("run 오류: %+v", resp.Error)
+	}
+	if elapsed >= 250*time.Millisecond {
+		t.Fatalf("초기 브리핑이 도착했는데 조기 반환되지 않았습니다: elapsed=%v", elapsed)
+	}
+	text := resp.Result.(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "원격 저장소 로그 확인 중") {
+		t.Fatalf("조기 반환 페이로드에 status_text 누락: %s", text)
+	}
+}
+
+func TestBridgeServerAdaptiveWaitExtendsWhenIdleAndWakesOnChange(t *testing.T) {
+	release := make(chan struct{})
+	triggerSecond := make(chan struct{})
+	fb := &fakeBridgeBackend{
+		streamFn: func(ctx context.Context, _ proto.ChatQueryParams, onChunk func(proto.ChatStreamChunk) error) (*proto.ChatStreamChunk, error) {
+			if onChunk != nil {
+				_ = onChunk(proto.ChatStreamChunk{
+					Type:           "data",
+					ConversationID: "c_adapt",
+					StatusText:     "1단계 분석 중",
+				})
+			}
+			select {
+			case <-triggerSecond:
+				if onChunk != nil {
+					_ = onChunk(proto.ChatStreamChunk{
+						Type:           "data",
+						ConversationID: "c_adapt",
+						StatusText:     "2단계 테스트 실행 중",
+					})
+				}
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			select {
+			case <-release:
+				return &proto.ChatStreamChunk{Type: "done", Text: "최종 완료", ConversationID: "c_adapt"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	srv := NewBridgeServer(fb, func() (*config.Config, error) { return &config.Config{DeviceID: "dev-1"}, nil })
+	srv.daemonSocketPath = ""
+	srv.defaultRunWait = 30 * time.Millisecond
+	srv.runEarlyMinWait = 0
+	srv.defaultWait = 45 * time.Millisecond
+	srv.waitIdleMax = 400 * time.Millisecond
+
+	runResp := runBridgeRPC(t, srv, `{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"gemini_remote_run","arguments":{"prompt":"적응형 wait 테스트"}}}`)
+	runText := runResp.Result.(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var running map[string]any
+	if err := json.Unmarshal([]byte(runText), &running); err != nil {
+		t.Fatalf("running JSON 파싱 실패: %v", err)
+	}
+	jobID := running["job_id"].(string)
+
+	// baseWait(45ms) 시점에는 변화가 없어 연장 대기하고, 100ms 시점에 새 상태가 들어오면 즉시 반환되어야 한다.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(triggerSecond)
+	}()
+
+	start := time.Now()
+	waitResp := runBridgeRPC(t, srv, `{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"gemini_remote_wait","arguments":{"job_id":"`+jobID+`"}}}`)
+	elapsed := time.Since(start)
+	close(release)
+
+	if waitResp.Error != nil {
+		t.Fatalf("wait 오류: %+v", waitResp.Error)
+	}
+	if elapsed < 80*time.Millisecond || elapsed >= 320*time.Millisecond {
+		t.Fatalf("적응형 연장 대기 후 변화 즉시 반환 범위(80ms~320ms) 이탈: elapsed=%v", elapsed)
+	}
+	waitText := waitResp.Result.(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(waitText, "2단계 테스트 실행 중") {
+		t.Fatalf("새 status_text 누락: %s", waitText)
+	}
+}
+
+func TestBridgeServerLiveStatusFileLifecycle(t *testing.T) {
+	statusDir := t.TempDir()
+	chunkSent := make(chan struct{})
+	release := make(chan struct{})
+	fb := &fakeBridgeBackend{
+		streamFn: func(ctx context.Context, _ proto.ChatQueryParams, onChunk func(proto.ChatStreamChunk) error) (*proto.ChatStreamChunk, error) {
+			if onChunk != nil {
+				_ = onChunk(proto.ChatStreamChunk{
+					Type:           "data",
+					ConversationID: "c_live",
+					StatusText:     "가평 날씨 검색 중\n줄바꿈제거확인",
+					ToolActivities: []proto.RemoteToolActivity{{ID: "t1", Name: "Google Search"}},
+				})
+			}
+			close(chunkSent)
+			select {
+			case <-release:
+				return &proto.ChatStreamChunk{Type: "done", Text: "끝", ConversationID: "c_live"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	srv := NewBridgeServer(fb, func() (*config.Config, error) { return &config.Config{DeviceID: "dev-1"}, nil })
+	srv.daemonSocketPath = ""
+	srv.SetLiveStatusDir(statusDir)
+	srv.defaultWait = 40 * time.Millisecond
+
+	req := `{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"gemini_remote_run","arguments":{"prompt":"상태 파일 테스트"},"_meta":{"antigravity.google/conversation_id":"conv-abc-123"}}}`
+	runResp := runBridgeRPC(t, srv, req)
+	<-chunkSent
+	if runResp.Error != nil {
+		t.Fatalf("run 오류: %+v", runResp.Error)
+	}
+
+	livePath := filepath.Join(statusDir, "mcp-live-status-conv-abc-123.txt")
+	// 쓰로틀(1s) 때문에 초기 파일은 startJob에서 이미 생성되어 있어야 한다.
+	raw, err := os.ReadFile(livePath)
+	if err != nil {
+		t.Fatalf("실시간 상태 파일이 생성되지 않았습니다: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) < 7 || lines[2] != "streaming" || lines[6] != "conv-abc-123" || !strings.Contains(lines[3], "가평 날씨 검색 중 줄바꿈제거확인") {
+		t.Fatalf("실시간 상태 파일 포맷/내용 불일치: %q", string(raw))
+	}
+
+	// 작업 완료 후 상태 파일이 자동 삭제되어야 한다.
+	runText := runResp.Result.(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var running map[string]any
+	_ = json.Unmarshal([]byte(runText), &running)
+	jobID := running["job_id"].(string)
+
+	close(release)
+	_ = runBridgeRPC(t, srv, `{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"gemini_remote_wait","arguments":{"job_id":"`+jobID+`","wait_seconds":2}}}`)
+
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		if _, err := os.Stat(livePath); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("작업 완료 후 실시간 상태 파일이 삭제되지 않았습니다: %s", livePath)
+		}
+		time.Sleep(15 * time.Millisecond)
 	}
 }

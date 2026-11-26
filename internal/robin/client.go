@@ -481,6 +481,15 @@ func summarizeToolArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
+	if srv, ok := args["ServerName"]; ok {
+		s := strings.TrimSpace(fmt.Sprintf("%v", srv))
+		if tool, ok2 := args["ToolName"]; ok2 {
+			t := strings.TrimSpace(fmt.Sprintf("%v", tool))
+			if s != "" && t != "" {
+				return s + "/" + t
+			}
+		}
+	}
 	for _, key := range []string{"intent", "TargetFile", "AbsolutePath", "FilePath", "DirectoryPath", "SearchPath", "command", "CommandLine", "path", "directory", "Query", "query", "pattern", "ToolName", "name"} {
 		if v, ok := args[key]; ok {
 			s := strings.TrimSpace(fmt.Sprintf("%v", v))

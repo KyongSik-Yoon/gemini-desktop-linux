@@ -496,6 +496,7 @@ func fatalf(format string, args ...any) {
 func handleMCPServe(ctx context.Context, cfg *config.Config, authMgr *auth.Manager) {
 	d := daemon.New(cfg, authMgr)
 	srv := mcp.NewBridgeServer(d.RobinClient(), config.LoadOrInit)
+	srv.SetLiveStatusDir(mcp.DefaultLiveStatusDir())
 	if err := srv.ServeStdio(ctx, os.Stdin, os.Stdout); err != nil && ctx.Err() == nil {
 		fatalf("MCP 서버 실행 오류: %v", err)
 	}

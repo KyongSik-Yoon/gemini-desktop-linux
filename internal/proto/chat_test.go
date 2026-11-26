@@ -304,3 +304,35 @@ func TestDecodeModelResponseExtractsFollowUpAndElicitations(t *testing.T) {
 		t.Fatalf("스트리밍 미완성 태그 마스킹 실패: cleaned=%q fu=%+v el=%+v had=%v", cleaned, fu, el, had)
 	}
 }
+
+func TestDecodeModelResponsePreservesLiteralTagsInCodeAndProse(t *testing.T) {
+	body := "- `internal/proto/chat.go`: 응답 본문에서 `<FollowUp>`·`<ElicitationsGroup>` 태그를 분리합니다.\n\n" +
+		"```xml\n<ElicitationsGroup message=\"예시\">\n  <Elicitation label=\"A\" query=\"A\"/>\n</ElicitationsGroup>\n```\n\n" +
+		"문장 중 <ElicitationsGroup> 언급도 그대로 유지되어야 합니다."
+
+	dt := NewBuilder()
+	dt.AppendString(1, body)
+	mr := NewBuilder()
+	mr.AppendString(1, "rc_literal")
+	mr.AppendMessage(2, dt.Bytes())
+	mr.AppendString(4, body)
+	mr.AppendInt32(19, CompletenessComplete)
+
+	got := decodeModelResponse(mr.Bytes())
+	if got.Text != body {
+		t.Fatalf("코드/산문 속 리터럴 태그가 잘렸습니다:\ngot =%q\nwant=%q", got.Text, body)
+	}
+	if got.FollowUp != nil || got.Elicitations != nil {
+		t.Fatalf("코드 속 예시 태그가 실제 후속 제안으로 오인되었습니다: followUp=%+v elicitations=%+v", got.FollowUp, got.Elicitations)
+	}
+
+	// 스트리밍 중간 청크(CompletenessPartial)에서도 백틱 인라인 코드 뒤 텍스트가 잘리지 않아야 한다.
+	mrPartial := NewBuilder()
+	mrPartial.AppendString(1, "rc_partial_literal")
+	mrPartial.AppendMessage(2, dt.Bytes())
+	mrPartial.AppendInt32(19, CompletenessPartial)
+	gotPartial := decodeModelResponse(mrPartial.Bytes())
+	if gotPartial.Text != body {
+		t.Fatalf("부분 스트리밍 중 코드/산문 속 리터럴 태그가 잘렸습니다:\ngot =%q\nwant=%q", gotPartial.Text, body)
+	}
+}

@@ -8,12 +8,12 @@ import (
 )
 
 var (
-	spanTagRe                 = regexp.MustCompile(`\[span_\d+\]\((?:start|end)_span\)`)
-	followUpTagRe             = regexp.MustCompile(`(?s)<FollowUp\b([^>]*?)/>`)
-	elicitationsGroupRe       = regexp.MustCompile(`(?s)<ElicitationsGroup\b([^>]*)>(.*?)</ElicitationsGroup>`)
-	elicitationItemRe         = regexp.MustCompile(`(?s)<Elicitation\b([^>]*?)/>`)
-	xmlAttrRe                 = regexp.MustCompile(`([A-Za-z0-9_:-]+)\s*=\s*"([^"]*)"`)
-	incompleteInteractiveRe   = regexp.MustCompile(`(?s)<(?:FollowUp|ElicitationsGroup|Elicitation)\b[^>]*$|<ElicitationsGroup\b[^>]*>[\s\S]*$`)
+	spanTagRe               = regexp.MustCompile(`\[span_\d+\]\((?:start|end)_span\)`)
+	followUpTagRe           = regexp.MustCompile(`(?s)<FollowUp\b([^>]*?)/>`)
+	elicitationsGroupRe     = regexp.MustCompile(`(?s)<ElicitationsGroup\b([^>]*)>(.*?)</ElicitationsGroup>`)
+	elicitationItemRe       = regexp.MustCompile(`(?s)<Elicitation\b([^>]*?)/>`)
+	xmlAttrRe               = regexp.MustCompile(`([A-Za-z0-9_:-]+)\s*=\s*"([^"]*)"`)
+	incompleteInteractiveRe = regexp.MustCompile(`(?m)(?:^|\n)[ \t]*<ElicitationsGroup(?:\s+[^>]*)?>\s*(?:<[\s\S]*)?$|(?s)<(?:FollowUp|ElicitationsGroup|Elicitation)\b[^>]*$`)
 )
 
 // RobinService 대화 클라이언트 열거형 상수
@@ -565,9 +565,167 @@ func parseXMLAttrs(raw string) map[string]string {
 	return out
 }
 
+// markdownCodeRanges는 마크다운 펜스 코드 블록(```/~~~)과 인라인 코드 스팬(`...`)의
+// 바이트 범위 [start, end) 목록을 반환한다.
+func markdownCodeRanges(s string) [][2]int {
+	var ranges [][2]int
+	n := len(s)
+	i := 0
+	lineStart := true
+
+	for i < n {
+		if lineStart {
+			// 들여쓰기 공백(최대 3칸) 뒤 펜스 코드 블록 시작 확인
+			ws := i
+			for ws < n && ws-i < 3 && s[ws] == ' ' {
+				ws++
+			}
+			if ws+2 < n && (s[ws] == '`' || s[ws] == '~') {
+				ch := s[ws]
+				j := ws
+				for j < n && s[j] == ch {
+					j++
+				}
+				fenceLen := j - ws
+				if fenceLen >= 3 {
+					// 여는 펜스 줄 끝까지 이동 (백틱 펜스의 info string에 백틱이 있으면 인라인 코드로 간주)
+					nl := strings.IndexByte(s[j:], '\n')
+					infoEnd := n
+					if nl >= 0 {
+						infoEnd = j + nl
+					}
+					if ch != '`' || !strings.ContainsRune(s[j:infoEnd], '`') {
+						blockStart := i
+						pos := infoEnd
+						if pos < n {
+							pos++
+						}
+						for pos < n {
+							nextNL := strings.IndexByte(s[pos:], '\n')
+							lineEnd := n
+							if nextNL >= 0 {
+								lineEnd = pos + nextNL
+							}
+							cws := pos
+							for cws < lineEnd && cws-pos < 3 && s[cws] == ' ' {
+								cws++
+							}
+							cj := cws
+							for cj < lineEnd && s[cj] == ch {
+								cj++
+							}
+							if cj-cws >= fenceLen && strings.TrimSpace(s[cj:lineEnd]) == "" {
+								pos = lineEnd
+								if pos < n {
+									pos++
+								}
+								break
+							}
+							pos = lineEnd
+							if pos < n {
+								pos++
+							}
+						}
+						ranges = append(ranges, [2]int{blockStart, pos})
+						i = pos
+						lineStart = true
+						continue
+					}
+				}
+			}
+		}
+
+		if s[i] == '`' {
+			j := i
+			for j < n && s[j] == '`' {
+				j++
+			}
+			tickLen := j - i
+			k := j
+			found := -1
+			for k < n {
+				if s[k] == '`' {
+					m := k
+					for m < n && s[m] == '`' {
+						m++
+					}
+					if m-k == tickLen {
+						found = m
+						break
+					}
+					k = m
+					continue
+				}
+				k++
+			}
+			if found > 0 {
+				ranges = append(ranges, [2]int{i, found})
+				i = found
+				lineStart = false
+				continue
+			}
+			i = j
+			lineStart = false
+			continue
+		}
+
+		lineStart = s[i] == '\n'
+		i++
+	}
+	return ranges
+}
+
+func overlapsAnyRange(start, end int, ranges [][2]int) bool {
+	for _, r := range ranges {
+		if start < r[1] && end > r[0] {
+			return true
+		}
+		if r[0] >= end {
+			break
+		}
+	}
+	return false
+}
+
+func replaceOutsideCode(s string, re *regexp.Regexp, fn func(match string, submatches []string) string) string {
+	idxs := re.FindAllStringSubmatchIndex(s, -1)
+	if len(idxs) == 0 {
+		return s
+	}
+	codeRanges := markdownCodeRanges(s)
+	var out strings.Builder
+	last := 0
+	replaced := false
+	for _, idx := range idxs {
+		start, end := idx[0], idx[1]
+		if overlapsAnyRange(start, end, codeRanges) {
+			continue
+		}
+		subs := make([]string, len(idx)/2)
+		for g := 0; g < len(idx); g += 2 {
+			if idx[g] >= 0 && idx[g+1] >= 0 {
+				subs[g/2] = s[idx[g]:idx[g+1]]
+			}
+		}
+		out.WriteString(s[last:start])
+		out.WriteString(fn(s[start:end], subs))
+		last = end
+		replaced = true
+	}
+	if !replaced {
+		return s
+	}
+	out.WriteString(s[last:])
+	return out.String()
+}
+
 // extractInteractiveSuggestions는 DisplayText(f2)에 포함된 <FollowUp> 및 <ElicitationsGroup>
 // 태그를 구조화된 후속 제안으로 분리하고 본문에서 해당 XML 블록과 미완성 스트리밍 꼬리를 제거한다.
 func extractInteractiveSuggestions(raw string) (string, *FollowUpPrompt, *ElicitationsGroup, bool) {
+	return extractInteractiveSuggestionsWithMode(raw, true)
+}
+
+func extractInteractiveSuggestionsWithMode(raw string, allowIncompleteTail bool) (string, *FollowUpPrompt, *ElicitationsGroup, bool) {
 	if !strings.Contains(raw, "<FollowUp") &&
 		!strings.Contains(raw, "<ElicitationsGroup") &&
 		!strings.Contains(raw, "<Elicitation") {
@@ -578,9 +736,8 @@ func extractInteractiveSuggestions(raw string) (string, *FollowUpPrompt, *Elicit
 	var elicitations *ElicitationsGroup
 	hadTag := false
 
-	cleaned := followUpTagRe.ReplaceAllStringFunc(raw, func(match string) string {
+	cleaned := replaceOutsideCode(raw, followUpTagRe, func(_ string, sub []string) string {
 		hadTag = true
-		sub := followUpTagRe.FindStringSubmatch(match)
 		if len(sub) >= 2 && followUp == nil {
 			attrs := parseXMLAttrs(sub[1])
 			label := attrs["label"]
@@ -595,9 +752,8 @@ func extractInteractiveSuggestions(raw string) (string, *FollowUpPrompt, *Elicit
 		return ""
 	})
 
-	cleaned = elicitationsGroupRe.ReplaceAllStringFunc(cleaned, func(match string) string {
+	cleaned = replaceOutsideCode(cleaned, elicitationsGroupRe, func(_ string, sub []string) string {
 		hadTag = true
-		sub := elicitationsGroupRe.FindStringSubmatch(match)
 		if len(sub) >= 3 {
 			attrs := parseXMLAttrs(sub[1])
 			msg := attrs["message"]
@@ -623,13 +779,20 @@ func extractInteractiveSuggestions(raw string) (string, *FollowUpPrompt, *Elicit
 		return ""
 	})
 
-	// 스트리밍 도중 닫히지 않은 꼬리 태그가 본문에 원시 XML로 노출되지 않도록 마스킹한다.
-	if loc := incompleteInteractiveRe.FindStringIndex(cleaned); loc != nil {
-		hadTag = true
-		cleaned = cleaned[:loc[0]]
+	// 스트리밍 도중(미완성 응답) 코드 영역 바깥 꼬리에 닫히지 않은 XML 태그가 노출되지 않도록 마스킹한다.
+	if allowIncompleteTail {
+		if loc := incompleteInteractiveRe.FindStringIndex(cleaned); loc != nil {
+			codeRanges := markdownCodeRanges(cleaned)
+			if !overlapsAnyRange(loc[0], loc[1], codeRanges) {
+				hadTag = true
+				cleaned = cleaned[:loc[0]]
+			}
+		}
 	}
 
-	cleaned = strings.TrimRight(cleaned, " \t\r\n")
+	if hadTag {
+		cleaned = strings.TrimRight(cleaned, " \t\r\n")
+	}
 	return cleaned, followUp, elicitations, hadTag
 }
 
@@ -696,7 +859,8 @@ func decodeModelResponse(data []byte) decodedModelResponse {
 		}
 	}
 
-	strippedDisplay, followUp, elicitations, hadInteractive := extractInteractiveSuggestions(displayText)
+	allowIncompleteTail := out.CompletenessState != CompletenessComplete
+	strippedDisplay, followUp, elicitations, hadInteractive := extractInteractiveSuggestionsWithMode(displayText, allowIncompleteTail)
 	out.FollowUp = followUp
 	out.Elicitations = elicitations
 
