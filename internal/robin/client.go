@@ -481,7 +481,7 @@ func summarizeToolArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
-	for _, key := range []string{"command", "CommandLine", "path", "DirectoryPath", "directory", "query", "pattern", "ToolName", "FilePath", "name"} {
+	for _, key := range []string{"intent", "TargetFile", "AbsolutePath", "FilePath", "DirectoryPath", "SearchPath", "command", "CommandLine", "path", "directory", "Query", "query", "pattern", "ToolName", "name"} {
 		if v, ok := args[key]; ok {
 			s := strings.TrimSpace(fmt.Sprintf("%v", v))
 			if s != "" {
@@ -836,6 +836,18 @@ func (c *Client) runSingleRemoteToolStream(ctx context.Context, sessionRoutingKe
 
 		if ev.SessionComplete {
 			fmt.Printf("[robin] 턴 도구 실행 완료 수신 (conversation_id=%s) -> 다음 턴 대비 스트림 갱신\n", ev.ConversationID)
+			if hooks.OnToolEvent != nil {
+				sid := ev.ConversationID
+				if sid == "" {
+					sid = sessionRoutingKey
+				}
+				hooks.OnToolEvent(ToolExecEvent{
+					SessionID:     sid,
+					ToolName:      "remote_session",
+					Phase:         "turn_completed",
+					TimestampUnix: time.Now().Unix(),
+				})
+			}
 			return streamRenewAcrossTurns, hadToolCalls, "0", nil
 		}
 	}

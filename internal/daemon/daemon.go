@@ -195,7 +195,7 @@ func (d *Daemon) handleWakeUpEvent(ctx context.Context, ev *proto.WakeUpEvent) {
 		d.notifyStatusChanged("scheduled_task:" + ev.ScheduledTaskName)
 	}
 	if ev.IsClientSyncHint {
-		d.notifyStatusChanged("conversations_updated")
+		d.notifyConversationUpdated(ev.SessionRoutingKey)
 	}
 	if ev.SessionRoutingKey == "" {
 		return

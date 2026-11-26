@@ -90,6 +90,7 @@ pub enum Icon {
     Unread,
     Flag,
     Progress,
+    CornerDownRight,
 }
 
 impl Icon {
@@ -184,16 +185,18 @@ impl Icon {
             Self::Tune => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2"/></svg>"#,
             // Google Drive 삼각형
             Self::Drive => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="8.5 3.5 15.5 3.5 21.5 14 17.8 20.5 6.2 20.5 2.5 14 8.5 3.5"/><line x1="8.5" y1="3.5" x2="15" y2="14.5"/><line x1="2.5" y1="14" x2="21.5" y2="14"/></svg>"#,
-            // 읽지 않음 표시
-            Self::Unread => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>"#,
+            // 읽지 않음 표시 (우상단 알림 점이 있는 말풍선)
+            Self::Unread => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5V15a2.5 2.5 0 0 1-2.5 2.5H7.5L3.5 21V6.5A2.5 2.5 0 0 1 6 4h7.5"/><circle cx="19" cy="5.5" r="2.5" fill="currentColor" stroke="none"/></svg>"#,
             // 확인 필요 깃발
             Self::Flag => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18"/><path d="M5 4h12l-2.5 4.5L17 13H5"/></svg>"#,
             // 진행 중 점선 원
             Self::Progress => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-dasharray="3.5 3.5"><circle cx="12" cy="12" r="8.5"/></svg>"#,
+            // 후속 제안/빠른 답장 화살표 (↪)
+            Self::CornerDownRight => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></svg>"#,
         }
     }
 
-    const ALL: [Self; 48] = [
+    const ALL: [Self; 49] = [
         Self::Sparkle,
         Self::SidebarToggle,
         Self::NewChat,
@@ -242,10 +245,11 @@ impl Icon {
         Self::Unread,
         Self::Flag,
         Self::Progress,
+        Self::CornerDownRight,
     ];
 
     fn cached_handle(self) -> svg::Handle {
-        static HANDLES: OnceLock<[svg::Handle; 48]> = OnceLock::new();
+        static HANDLES: OnceLock<[svg::Handle; 49]> = OnceLock::new();
         let table = HANDLES.get_or_init(|| Self::ALL.map(|icon| svg::Handle::from_memory(icon.raw_svg())));
         table[self as usize].clone()
     }

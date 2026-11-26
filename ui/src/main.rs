@@ -25,12 +25,12 @@ use iced::{
 };
 use ipc::{
     BardModeOption, BotSummary, BotsResponse, ChatStreamChunk, ChatStreamRequest,
-    ConversationSummary, ConversationTurn, DevicesResponse, GeneratedImage, HealthResponse,
-    LibraryEntry, LibraryResponse, ListConversationsResponse, ListTurnsResponse, ModelsResponse,
-    Notebook, NotebooksResponse, RecommendedSchedule, RegisteredDevice, RemoteEvent,
-    RemoteStatusSnapshot, RemoteToolActivity, ScheduleRunResult, ScheduledTask, SchedulesResponse,
-    SearchHit, SearchResponse, ShareResponse, StreamEvent, TurnArtifact, TurnAttachment,
-    UIPreferences, UsageInfo, UserProfile,
+    ConversationSummary, ConversationTurn, DevicesResponse, ElicitationsGroup, FollowUpPrompt,
+    GeneratedImage, HealthResponse, LibraryEntry, LibraryResponse, ListConversationsResponse,
+    ListTurnsResponse, ModelsResponse, Notebook, NotebooksResponse, RecommendedSchedule,
+    RegisteredDevice, RemoteEvent, RemoteStatusSnapshot, RemoteToolActivity, ScheduleRunResult,
+    ScheduledTask, SchedulesResponse, SearchHit, SearchResponse, ShareResponse, StreamEvent,
+    TurnArtifact, TurnAttachment, UIPreferences, UsageInfo, UserProfile,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -161,6 +161,8 @@ pub(crate) struct ChatMessage {
     pub(crate) attachment_items: Vec<TurnAttachment>,
     pub(crate) generated_images: Vec<GeneratedImage>,
     pub(crate) artifacts: Vec<TurnArtifact>,
+    pub(crate) follow_up: Option<FollowUpPrompt>,
+    pub(crate) elicitations: Option<ElicitationsGroup>,
     pub(crate) is_scheduled_run: bool,
     pub(crate) scheduled_title: String,
     pub(crate) aborted: bool,
@@ -186,6 +188,8 @@ impl ChatMessage {
             attachment_items: Vec::new(),
             generated_images: Vec::new(),
             artifacts: Vec::new(),
+            follow_up: None,
+            elicitations: None,
             is_scheduled_run: false,
             scheduled_title: String::new(),
             aborted: false,
@@ -212,6 +216,8 @@ impl ChatMessage {
             attachment_items: Vec::new(),
             generated_images: Vec::new(),
             artifacts: Vec::new(),
+            follow_up: None,
+            elicitations: None,
             is_scheduled_run: false,
             scheduled_title: String::new(),
             aborted: false,
@@ -275,6 +281,9 @@ pub(crate) struct App {
     sidebar_resize_hovered: bool,
     sidebar_resize_start_width: Option<f32>,
     window_width: f32,
+    pub(crate) window_height: f32,
+    pub(crate) sidebar_scroll_y: f32,
+    pub(crate) hovered_conv_id: Option<String>,
     pub(crate) active_section: ActiveSection,
     pub(crate) more_menu_open: bool,
     pub(crate) filter_menu_open: bool,
@@ -339,7 +348,6 @@ pub(crate) struct App {
     pub(crate) active_conv_is_agent: bool,
     pub(crate) active_project_id: Option<String>,
     pub(crate) active_title: String,
-    pub(crate) active_model: String,
     parent_request_id: String,
     parent_response_id: String,
     pending_scroll_request_id: Option<String>,
@@ -447,6 +455,9 @@ pub(crate) enum Message {
     OpenConvMenu(String),
     CloseConvMenu,
     ToggleConvMenuNotebookSub,
+    HoverConv(String),
+    LeaveConv(String),
+    SidebarScrolled(f32),
 
     // 검색 모달
     OpenSearchModal,
@@ -500,6 +511,8 @@ pub(crate) enum Message {
     ConversationDeleted(Result<String, String>),
     SendFeedback(usize, bool),
     FeedbackSent(usize, Option<bool>, Result<(), String>),
+    SendFollowUp(usize),
+    SendElicitation(usize, usize),
 
     // 노트북
     NewNotebook,
@@ -633,6 +646,9 @@ impl App {
             sidebar_resize_hovered: false,
             sidebar_resize_start_width: None,
             window_width: 1240.0,
+            window_height: 820.0,
+            sidebar_scroll_y: 0.0,
+            hovered_conv_id: None,
             active_section: ActiveSection::Chat,
             more_menu_open: false,
             filter_menu_open: false,
@@ -689,7 +705,6 @@ impl App {
             active_conv_is_agent: false,
             active_project_id: None,
             active_title: String::new(),
-            active_model: String::new(),
             parent_request_id: String::new(),
             parent_response_id: String::new(),
             pending_scroll_request_id: None,
@@ -885,7 +900,6 @@ impl App {
         self.active_conv_is_agent = false;
         self.active_project_id = None;
         self.active_title.clear();
-        self.active_model.clear();
         self.parent_request_id.clear();
         self.parent_response_id.clear();
         self.pending_scroll_request_id = None;
@@ -1212,6 +1226,7 @@ impl App {
             Message::RuntimeEvent(ev) => match ev {
                 Event::Window(window::Event::Resized(size)) => {
                     self.window_width = size.width;
+                    self.window_height = size.height;
                     self.sidebar_width = clamp_sidebar_width(self.sidebar_width, self.window_width);
                     Task::none()
                 }
@@ -1774,6 +1789,20 @@ impl App {
                 self.conv_menu_notebook_sub = !self.conv_menu_notebook_sub;
                 Task::none()
             }
+            Message::HoverConv(conv_id) => {
+                self.hovered_conv_id = Some(conv_id);
+                Task::none()
+            }
+            Message::LeaveConv(conv_id) => {
+                if self.hovered_conv_id.as_deref() == Some(conv_id.as_str()) {
+                    self.hovered_conv_id = None;
+                }
+                Task::none()
+            }
+            Message::SidebarScrolled(y) => {
+                self.sidebar_scroll_y = y;
+                Task::none()
+            }
             Message::OpenSearchModal => {
                 self.search_modal_open = true;
                 self.model_menu_open = false;
@@ -2160,6 +2189,8 @@ impl App {
                         || !t.tool_activities.is_empty()
                         || !t.generated_images.is_empty()
                         || !t.artifacts.is_empty()
+                        || t.follow_up.is_some()
+                        || t.elicitations.is_some()
                         || t.aborted
                     {
                         let mut m = ChatMessage::model(
@@ -2173,6 +2204,8 @@ impl App {
                         m.tool_activities = t.tool_activities.clone();
                         m.generated_images = t.generated_images.clone();
                         m.artifacts = t.artifacts.clone();
+                        m.follow_up = t.follow_up.clone();
+                        m.elicitations = t.elicitations.clone();
                         m.is_scheduled_run = t.is_scheduled_run;
                         m.scheduled_title = t.scheduled_title.clone();
                         m.aborted = t.aborted;
@@ -2199,7 +2232,6 @@ impl App {
                 if let Some(last) = turns.last() {
                     self.parent_request_id = last.request_id.clone();
                     self.parent_response_id = last.response_id.clone();
-                    self.active_model = last.model_attribution.clone();
                 }
                 if let Some(target_req) = self.pending_scroll_request_id.take()
                     && let Some(pos) = self
@@ -3348,6 +3380,49 @@ impl App {
                 }
                 Task::none()
             }
+            Message::SendFollowUp(idx) => {
+                if self.is_streaming {
+                    return Task::none();
+                }
+                let query = self
+                    .messages
+                    .get(idx)
+                    .and_then(|m| m.follow_up.as_ref())
+                    .map(|fu| {
+                        if fu.query.trim().is_empty() {
+                            fu.label.clone()
+                        } else {
+                            fu.query.clone()
+                        }
+                    })
+                    .unwrap_or_default();
+                if query.trim().is_empty() {
+                    return Task::none();
+                }
+                self.dispatch_prompt(query, Vec::new())
+            }
+            Message::SendElicitation(msg_idx, item_idx) => {
+                if self.is_streaming {
+                    return Task::none();
+                }
+                let query = self
+                    .messages
+                    .get(msg_idx)
+                    .and_then(|m| m.elicitations.as_ref())
+                    .and_then(|g| g.items.get(item_idx))
+                    .map(|it| {
+                        if it.query.trim().is_empty() {
+                            it.label.clone()
+                        } else {
+                            it.query.clone()
+                        }
+                    })
+                    .unwrap_or_default();
+                if query.trim().is_empty() {
+                    return Task::none();
+                }
+                self.dispatch_prompt(query, Vec::new())
+            }
             Message::DismissError => {
                 self.error_banner = None;
                 Task::none()
@@ -3524,9 +3599,6 @@ impl App {
         if !ch.title.is_empty() {
             self.active_title = ch.title.clone();
         }
-        if !ch.model.is_empty() {
-            self.active_model = ch.model.clone();
-        }
 
         if let Some(last) = self.messages.last_mut()
             && last.role == Role::Model
@@ -3579,6 +3651,12 @@ impl App {
             }
             if !ch.artifacts.is_empty() {
                 last.artifacts = ch.artifacts.clone();
+            }
+            if ch.follow_up.is_some() {
+                last.follow_up = ch.follow_up.clone();
+            }
+            if ch.elicitations.is_some() {
+                last.elicitations = ch.elicitations.clone();
             }
             for act in &ch.tool_activities {
                 let exists = last.tool_activities.iter_mut().find(|existing| {

@@ -554,6 +554,33 @@ pub struct TurnArtifact {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct FollowUpPrompt {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub query: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ElicitationItem {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub query: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ElicitationsGroup {
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub items: Vec<ElicitationItem>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConversationTurn {
     #[serde(default)]
@@ -578,6 +605,10 @@ pub struct ConversationTurn {
     pub generated_images: Vec<GeneratedImage>,
     #[serde(default)]
     pub artifacts: Vec<TurnArtifact>,
+    #[serde(default)]
+    pub follow_up: Option<FollowUpPrompt>,
+    #[serde(default)]
+    pub elicitations: Option<ElicitationsGroup>,
     #[serde(default)]
     pub is_scheduled_run: bool,
     #[serde(default)]
@@ -678,6 +709,10 @@ pub struct ChatStreamChunk {
     #[serde(default)]
     pub artifacts: Vec<TurnArtifact>,
     #[serde(default)]
+    pub follow_up: Option<FollowUpPrompt>,
+    #[serde(default)]
+    pub elicitations: Option<ElicitationsGroup>,
+    #[serde(default)]
     pub target_device_name: String,
     #[serde(default)]
     pub title: String,
@@ -689,8 +724,8 @@ pub struct ChatStreamChunk {
 
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
-    Chunk(ChatStreamChunk),
-    Done(ChatStreamChunk),
+    Chunk(Box<ChatStreamChunk>),
+    Done(Box<ChatStreamChunk>),
     Error(String),
 }
 
@@ -1238,9 +1273,9 @@ fn dispatch_chat_sse_event(
     if let Ok(chunk) = serde_json::from_str::<ChatStreamChunk>(data) {
         let item = if ev == "done" {
             *sent_terminal = true;
-            StreamEvent::Done(chunk)
+            StreamEvent::Done(Box::new(chunk))
         } else {
-            StreamEvent::Chunk(chunk)
+            StreamEvent::Chunk(Box::new(chunk))
         };
         if tx.try_send(item).is_err() {
             return false;

@@ -120,6 +120,7 @@ pub fn t(locale: Locale, ko: &str) -> &str {
         "동기화" => "Sync",
         "켜짐" => "On",
         "꺼짐" => "Off",
+        "예" => "Yes",
         "취소" => "Cancel",
         "연결됨" => "Connected",
         "미연결" => "Disconnected",

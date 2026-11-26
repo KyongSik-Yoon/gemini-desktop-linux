@@ -28,6 +28,39 @@ type MCPServerConfig struct {
 	Enabled     bool              `json:"enabled"`
 }
 
+// MCPBridgeConfig는 `gemini-remote mcp-serve` MCP 위임 서버의 기본 실행 설정을 담는다.
+type MCPBridgeConfig struct {
+	DefaultModel         string `json:"default_model,omitempty"`
+	DefaultThinkingLevel string `json:"default_thinking_level,omitempty"` // "", "auto", "low", "medium", "high"
+	DefaultDeviceID      string `json:"default_device_id,omitempty"`      // 비어 있으면 로컬 PC(DeviceID)
+	DefaultAgentTask     *bool  `json:"default_agent_task,omitempty"`     // 미지정 시 true
+	DefaultTemporary     bool   `json:"default_temporary,omitempty"`
+}
+
+// EffectiveAgentTask는 기본 agent_task 활성화 여부를 반환한다(미지정 시 true).
+func (b MCPBridgeConfig) EffectiveAgentTask() bool {
+	if b.DefaultAgentTask == nil {
+		return true
+	}
+	return *b.DefaultAgentTask
+}
+
+// NormalizeThinkingLevel은 사고 수준 문자열을 정규화하고 프로토콜 enum 값으로 변환한다.
+func NormalizeThinkingLevel(raw string) (string, int32, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto", "0":
+		return "auto", 0, nil
+	case "low", "1":
+		return "low", 1, nil
+	case "medium", "med", "4":
+		return "medium", 4, nil
+	case "high", "2":
+		return "high", 2, nil
+	default:
+		return "", 0, fmt.Errorf("지원하지 않는 thinking level: %q (auto, low, medium, high 중 선택)", raw)
+	}
+}
+
 // Config는 gemini-remote-linux 데몬의 영구 설정을 담는다.
 type Config struct {
 	mu sync.RWMutex `json:"-"`
@@ -42,10 +75,41 @@ type Config struct {
 	TimeZone          string            `json:"time_zone"`
 	ConnectedFolders  []string          `json:"connected_folders"`
 	MCPServers        []MCPServerConfig `json:"mcp_servers"`
+	MCPBridge         MCPBridgeConfig   `json:"mcp_bridge,omitempty"`
 	RemoteEnabled     *bool             `json:"remote_enabled,omitempty"`
 	ObsidianVaultDir  string            `json:"obsidian_vault_dir,omitempty"`
 	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `json:"oauth_client_secret,omitempty"`
+}
+
+// GetMCPBridge는 MCP 브릿지 기본 설정 복사본을 스레드 안전하게 반환한다.
+func (c *Config) GetMCPBridge() MCPBridgeConfig {
+	if c == nil {
+		return MCPBridgeConfig{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cp := c.MCPBridge
+	if c.MCPBridge.DefaultAgentTask != nil {
+		v := *c.MCPBridge.DefaultAgentTask
+		cp.DefaultAgentTask = &v
+	}
+	return cp
+}
+
+// SetMCPBridge는 MCP 브릿지 기본 설정을 스레드 안전하게 갱신한다.
+func (c *Config) SetMCPBridge(b MCPBridgeConfig) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	cp := b
+	if b.DefaultAgentTask != nil {
+		v := *b.DefaultAgentTask
+		cp.DefaultAgentTask = &v
+	}
+	c.MCPBridge = cp
+	c.mu.Unlock()
 }
 
 // IsRemoteEnabled는 원격 제어 수신이 활성화되어 있는지 반환한다(미설정 시 기본 true).

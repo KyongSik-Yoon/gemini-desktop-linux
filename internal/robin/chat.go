@@ -563,6 +563,12 @@ func (c *Client) StreamQuery(ctx context.Context, params proto.ChatQueryParams, 
 			if len(ch.Artifacts) > 0 {
 				final.Artifacts = mergeTurnArtifacts(final.Artifacts, ch.Artifacts)
 			}
+			if ch.FollowUp != nil {
+				final.FollowUp = ch.FollowUp
+			}
+			if ch.Elicitations != nil {
+				final.Elicitations = ch.Elicitations
+			}
 
 			if ch.Type == "data" {
 				if ch.Text != "" {

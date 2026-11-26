@@ -134,6 +134,12 @@ func main() {
 	case "chat":
 		handleChatREPL(ctx, cfg, authMgr, os.Args[2:])
 
+	case "mcp-serve":
+		handleMCPServe(ctx, cfg, authMgr)
+
+	case "mcp":
+		handleMCP(ctx, cfg, authMgr, os.Args[2:])
+
 	case "status":
 		cfgPath, _ := config.ConfigPath()
 		tokPath, _ := config.TokenPath()
@@ -476,6 +482,8 @@ func printUsage() {
   gemini-remote folders [list|add|remove]   허용 워크스페이스 폴더 조회/추가/제거
   gemini-remote service [install|uninstall|status]  systemd 사용자 서비스 관리
   gemini-remote test-tool <name> [json]     로컬 도구(19종) 단독 실행 테스트
+  gemini-remote mcp-serve                   stdio JSON-RPC 2.0 MCP 위임 서버 실행
+  gemini-remote mcp [show|set|models]       MCP 브릿지 기본 모델/사고 수준/기기 설정 및 조회
   gemini-remote status                      현재 기기 ID, 소켓 경로 및 설정 상태 출력
   gemini-remote doctor [--json]             인증·Robin·Punctual·로컬 소켓 프로토콜 자가 진단`)
 }
@@ -483,4 +491,287 @@ func printUsage() {
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "오류: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+func handleMCPServe(ctx context.Context, cfg *config.Config, authMgr *auth.Manager) {
+	d := daemon.New(cfg, authMgr)
+	srv := mcp.NewBridgeServer(d.RobinClient(), config.LoadOrInit)
+	if err := srv.ServeStdio(ctx, os.Stdin, os.Stdout); err != nil && ctx.Err() == nil {
+		fatalf("MCP 서버 실행 오류: %v", err)
+	}
+}
+
+func handleMCP(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	if len(args) == 0 {
+		handleMCPShow(cfg, nil)
+		return
+	}
+	switch args[0] {
+	case "show", "status":
+		handleMCPShow(cfg, args[1:])
+	case "set":
+		handleMCPSet(ctx, cfg, authMgr, args[1:])
+	case "models":
+		handleMCPModels(ctx, cfg, authMgr, args[1:])
+	case "usage", "quota":
+		handleMCPUsage(ctx, cfg, authMgr, args[1:])
+	case "serve":
+		handleMCPServe(ctx, cfg, authMgr)
+	case "help", "-h", "--help":
+		printMCPUsage()
+	default:
+		printMCPUsage()
+		fatalf("알 수 없는 mcp 하위 명령: %s", args[0])
+	}
+}
+
+func printMCPUsage() {
+	fmt.Println("gemini-remote mcp - MCP 브릿지 설정 및 조회")
+	fmt.Println("  gemini-remote mcp-serve")
+	fmt.Println("  gemini-remote mcp show [--json]")
+	fmt.Println("  gemini-remote mcp set [--model <id|이름|auto>] [--thinking <auto|low|medium|high>] [--device <id|local>] [--agent-task <true|false>] [--temporary <true|false>] [--reset]")
+	fmt.Println("  gemini-remote mcp models [--json]")
+	fmt.Println("  gemini-remote mcp usage [--json]   (별칭: quota) 5시간/주간 사용량 및 잔여 쿼터 조회")
+}
+
+func handleMCPShow(cfg *config.Config, args []string) {
+	asJSON := false
+	for _, a := range args {
+		if a == "--json" {
+			asJSON = true
+		}
+	}
+	cfgPath, _ := config.ConfigPath()
+	bridge := cfg.GetMCPBridge()
+
+	effectiveModel := firstNonEmpty(bridge.DefaultModel, "auto (계정 기본값)")
+	effectiveThinking := firstNonEmpty(bridge.DefaultThinkingLevel, "auto")
+	effectiveDevice := firstNonEmpty(bridge.DefaultDeviceID, cfg.DeviceID)
+
+	if asJSON {
+		b, _ := json.MarshalIndent(map[string]any{
+			"config_path":            cfgPath,
+			"remote_enabled":         cfg.IsRemoteEnabled(),
+			"default_model":          bridge.DefaultModel,
+			"default_thinking_level": effectiveThinking,
+			"default_device_id":      bridge.DefaultDeviceID,
+			"effective_device_id":    effectiveDevice,
+			"default_agent_task":     bridge.EffectiveAgentTask(),
+			"default_temporary":      bridge.DefaultTemporary,
+		}, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+
+	deviceLabel := effectiveDevice
+	if bridge.DefaultDeviceID == "" {
+		deviceLabel = fmt.Sprintf("%s (%s, 로컬 기본값)", cfg.DeviceName, cfg.DeviceID)
+	}
+	fmt.Printf("MCP 브릿지 설정 (%s)\n", cfgPath)
+	fmt.Printf("  기본 모델:      %s\n", effectiveModel)
+	fmt.Printf("  사고 수준:      %s\n", effectiveThinking)
+	fmt.Printf("  대상 기기:      %s\n", deviceLabel)
+	fmt.Printf("  원격 에이전트:  %v\n", bridge.EffectiveAgentTask())
+	fmt.Printf("  임시 대화:      %v\n", bridge.DefaultTemporary)
+	fmt.Printf("  원격 수신 활성: %v\n", cfg.IsRemoteEnabled())
+}
+
+func applyMCPSetArgs(cfg *config.Config, args []string) (bool, string, error) {
+	if len(args) == 0 {
+		return false, "", fmt.Errorf("변경할 옵션을 지정하세요")
+	}
+	bridge := cfg.GetMCPBridge()
+	changed := false
+	setModel := ""
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		val := ""
+		hasEq := false
+		if eq := strings.IndexByte(arg, '='); eq > 0 {
+			val = arg[eq+1:]
+			arg = arg[:eq]
+			hasEq = true
+		}
+		needVal := func(name string) (string, error) {
+			if hasEq {
+				return val, nil
+			}
+			if i+1 >= len(args) {
+				return "", fmt.Errorf("%s 옵션에 값이 필요합니다", name)
+			}
+			i++
+			return args[i], nil
+		}
+
+		switch arg {
+		case "--reset":
+			bridge = config.MCPBridgeConfig{}
+			setModel = ""
+			changed = true
+		case "--model", "-m":
+			v, err := needVal(arg)
+			if err != nil {
+				return false, "", err
+			}
+			v = strings.TrimSpace(v)
+			if v == "" || strings.EqualFold(v, "auto") || strings.EqualFold(v, "none") {
+				bridge.DefaultModel = ""
+				setModel = ""
+			} else {
+				bridge.DefaultModel = v
+				setModel = v
+			}
+			changed = true
+		case "--thinking", "-t":
+			v, err := needVal(arg)
+			if err != nil {
+				return false, "", err
+			}
+			canon, _, err := config.NormalizeThinkingLevel(v)
+			if err != nil {
+				return false, "", err
+			}
+			if canon == "auto" {
+				bridge.DefaultThinkingLevel = ""
+			} else {
+				bridge.DefaultThinkingLevel = canon
+			}
+			changed = true
+		case "--device", "-d":
+			v, err := needVal(arg)
+			if err != nil {
+				return false, "", err
+			}
+			v = strings.TrimSpace(v)
+			if v == "" || strings.EqualFold(v, "local") || strings.EqualFold(v, "auto") {
+				bridge.DefaultDeviceID = ""
+			} else {
+				bridge.DefaultDeviceID = v
+			}
+			changed = true
+		case "--agent-task":
+			v, err := needVal(arg)
+			if err != nil {
+				return false, "", err
+			}
+			b, err := strconv.ParseBool(strings.TrimSpace(v))
+			if err != nil {
+				return false, "", fmt.Errorf("--agent-task는 true 또는 false여야 합니다: %q", v)
+			}
+			bridge.DefaultAgentTask = &b
+			changed = true
+		case "--temporary":
+			v, err := needVal(arg)
+			if err != nil {
+				return false, "", err
+			}
+			b, err := strconv.ParseBool(strings.TrimSpace(v))
+			if err != nil {
+				return false, "", fmt.Errorf("--temporary는 true 또는 false여야 합니다: %q", v)
+			}
+			bridge.DefaultTemporary = b
+			changed = true
+		default:
+			return false, "", fmt.Errorf("알 수 없는 옵션: %s", arg)
+		}
+	}
+
+	cfg.SetMCPBridge(bridge)
+	return changed, setModel, nil
+}
+
+func handleMCPSet(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	changed, setModel, err := applyMCPSetArgs(cfg, args)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	if !changed {
+		return
+	}
+	if setModel != "" {
+		d := daemon.New(cfg, authMgr)
+		if st, merr := d.RobinClient().GetUserStatus(ctx); merr == nil && st != nil && len(st.Models) > 0 {
+			if matched, ok := mcp.ResolveModel(st.Models, setModel); ok {
+				b := cfg.GetMCPBridge()
+				b.DefaultModel = matched.ID
+				cfg.SetMCPBridge(b)
+				fmt.Printf("모델 확인됨: %s (%s)\n", matched.ID, firstNonEmpty(matched.TitleForPicker, matched.Title))
+			} else {
+				fmt.Fprintf(os.Stderr, "경고: 현재 계정 모델 목록에서 %q를 찾지 못했습니다. 입력값 그대로 저장합니다.\n", setModel)
+			}
+		}
+	}
+	if err := cfg.Save(); err != nil {
+		fatalf("설정 저장 실패: %v", err)
+	}
+	fmt.Println("MCP 브릿지 설정을 저장했습니다.")
+	handleMCPShow(cfg, nil)
+}
+
+func handleMCPModels(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	asJSON := false
+	for _, a := range args {
+		if a == "--json" {
+			asJSON = true
+		}
+	}
+	d := daemon.New(cfg, authMgr)
+	status, err := d.RobinClient().GetUserStatus(ctx)
+	if err != nil {
+		fatalf("모델 목록 조회 실패: %v", err)
+	}
+	bridge := cfg.GetMCPBridge()
+	if asJSON {
+		b, _ := json.MarshalIndent(map[string]any{
+			"tier":          status.Tier,
+			"default_model": bridge.DefaultModel,
+			"models":        status.Models,
+		}, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Printf("사용 가능한 Gemini 모델 (티어: %s)\n", firstNonEmpty(status.Tier, "unknown"))
+	for _, m := range status.Models {
+		mark := " "
+		if bridge.DefaultModel != "" && strings.EqualFold(bridge.DefaultModel, m.ID) {
+			mark = "*"
+		}
+		title := firstNonEmpty(m.TitleForPicker, m.Title, m.ModeName)
+		thinking := "no"
+		if m.SupportsThinking {
+			thinking = "yes"
+		}
+		fmt.Printf(" %s %-28s  cat=%-2d  thinking=%-3s  %s\n", mark, m.ID, m.ModeCategory, thinking, title)
+	}
+}
+
+func handleMCPUsage(ctx context.Context, cfg *config.Config, authMgr *auth.Manager, args []string) {
+	asJSON := false
+	for _, a := range args {
+		if a == "--json" {
+			asJSON = true
+		}
+	}
+	d := daemon.New(cfg, authMgr)
+	info, err := d.RobinClient().GetUsageInfo(ctx)
+	if err != nil {
+		fatalf("사용량 한도 조회 실패: %v", err)
+	}
+	sum := mcp.SummarizeUsage(info, time.Now())
+	if asJSON {
+		b, _ := json.MarshalIndent(sum, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Println(mcp.FormatUsageText(sum))
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

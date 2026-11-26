@@ -1,6 +1,6 @@
 use crate::i18n::{pick, t};
 use crate::icons::Icon;
-use crate::theme::{font_medium, font_regular, font_semibold};
+use crate::theme::{font_medium, font_regular};
 use crate::{
     ActiveSection, App, CONTENT_MAX_WIDTH, ComposerMode, ConvFilter, FEATURE_MODE_CANVAS,
     FEATURE_MODE_DEEP_RESEARCH, FEATURE_MODE_GUIDED_LEARNING, FEATURE_MODE_IMAGE,
@@ -858,7 +858,7 @@ impl App {
         let border_subtle = pal.border_subtle;
         let text_primary = pal.text_primary;
         let text_secondary = pal.text_secondary;
-        let danger = pal.danger;
+        let is_dark = pal.is_dark;
 
         let cid = conv.conversation_id.clone();
         let title = conv.title.clone();
@@ -881,14 +881,19 @@ impl App {
             .style(move |_, status| ghost_btn_style(status, bg_hover, color, 10.0))
         };
 
+        let mut nb_row = row![
+            Icon::Notebook.view(15.5, text_primary),
+            text(t(loc, "노트북에 추가")).size(13.5).color(text_primary),
+            space::horizontal(),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        if self.conv_menu_notebook_sub {
+            nb_row = nb_row.push(Icon::ChevronUp.view(14.0, text_secondary));
+        }
+
+        // 원본 앱과 동일하게 상단 제목·구분선·위험색 강조 없이 6개 항목을 일관된 톤으로 배치한다.
         let mut list = column![
-            container(
-                text(truncate_single_line(&title, 26))
-                    .size(11.5)
-                    .font(font_semibold())
-                    .color(text_secondary),
-            )
-            .padding([5, 10]),
             row_btn(
                 Icon::Share,
                 t(loc, "대화 공유").into(),
@@ -921,24 +926,11 @@ impl App {
                 text_primary,
                 Message::ToggleUnreadConversation(cid.clone(), !has_unread),
             ),
-            button(
-                row![
-                    Icon::Notebook.view(15.5, text_primary),
-                    text(t(loc, "노트북에 추가")).size(13.5).color(text_primary),
-                    space::horizontal(),
-                    if self.conv_menu_notebook_sub {
-                        Icon::ChevronUp.view(14.0, text_secondary)
-                    } else {
-                        Icon::ChevronRight.view(14.0, text_secondary)
-                    },
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            )
-            .on_press(Message::ToggleConvMenuNotebookSub)
-            .width(Fill)
-            .padding([8, 12])
-            .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 10.0)),
+            button(nb_row)
+                .on_press(Message::ToggleConvMenuNotebookSub)
+                .width(Fill)
+                .padding([8, 12])
+                .style(move |_, status| ghost_btn_style(status, bg_hover, text_primary, 10.0)),
         ]
         .spacing(2);
 
@@ -976,24 +968,63 @@ impl App {
             list = list.push(nb_sub);
         }
 
-        list = list.push(popover_divider(border_subtle));
         list = list.push(row_btn(
             Icon::Trash,
             t(loc, "삭제").into(),
-            danger,
+            text_primary,
             Message::DeleteConversation(cid),
         ));
 
-        let card = popover_card(list, 236.0, bg_popover, border_subtle, pal.is_dark);
+        let card_width = if self.conv_menu_notebook_sub {
+            216.0
+        } else {
+            194.0
+        };
+        let shadow_alpha = if is_dark { 0.44 } else { 0.12 };
+        let card = container(list)
+            .width(Length::Fixed(card_width))
+            .padding(6)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg_popover)),
+                border: Border {
+                    radius: 14.0.into(),
+                    width: if is_dark { 1.0 } else { 0.0 },
+                    color: border_subtle,
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, shadow_alpha),
+                    offset: Vector::new(0.0, 6.0),
+                    blur_radius: 22.0,
+                },
+                ..container::Style::default()
+            });
+
         let backdrop = mouse_area(container(space::horizontal()).width(Fill).height(Fill))
             .on_press(Message::CloseConvMenu);
 
+        // 클릭한 대화 행의 세로 위치를 사이드바 스크롤 오프셋과 창 높이에 맞춰 계산한다.
+        let filtered = self.filtered_conversations();
+        let row_idx = filtered
+            .iter()
+            .position(|c| c.conversation_id == *target_id)
+            .unwrap_or(0);
+        let nb_visible = self.notebooks.len().min(3) as f32;
+        let conv_list_start_y = 50.0 + 214.0 + (100.0 + nb_visible * 33.0) + 42.0 + 6.0;
+        let row_y = conv_list_start_y + (row_idx as f32) * 34.0 - self.sidebar_scroll_y;
+        let est_menu_h = if self.conv_menu_notebook_sub {
+            232.0 + (self.notebooks.len().clamp(1, 6) as f32) * 30.0
+        } else {
+            232.0
+        };
+        let max_top = (self.window_height - est_menu_h - 20.0).max(56.0);
+        let top = (row_y + 16.0).clamp(56.0, max_top);
+
         let positioned = container(card)
             .padding(Padding {
-                top: 380.0,
+                top,
                 right: 0.0,
                 bottom: 0.0,
-                left: (self.sidebar_width - 28.0).max(16.0),
+                left: (self.sidebar_width - 10.0).max(16.0),
             })
             .width(Fill)
             .height(Fill);

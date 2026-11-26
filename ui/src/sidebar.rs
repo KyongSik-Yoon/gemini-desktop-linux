@@ -8,7 +8,8 @@ use crate::{
     sidebar_text_units, truncate_single_line,
 };
 use iced::widget::{
-    button, canvas, column, container, image, row, scrollable, space, stack, text, text_input,
+    button, canvas, column, container, image, mouse_area, row, scrollable, space, stack, text,
+    text_input,
 };
 use iced::{Alignment, Background, Border, ContentFit, Element, Fill, Length, Padding};
 
@@ -243,29 +244,16 @@ impl App {
         )
         .padding(Padding {
             top: 12.0,
-            right: 6.0,
+            right: 4.0,
             bottom: 4.0,
             left: 10.0,
         });
 
-        let filtered: Vec<&ConversationSummary> = self
-            .conversations
-            .iter()
-            .filter(|c| match self.conv_filter {
-                ConvFilter::All => true,
-                ConvFilter::Ready => !c.has_unread,
-                ConvFilter::NeedsAttention => c.has_unread,
-                ConvFilter::InProgress => {
-                    self.is_streaming
-                        && self.active_conv_id.as_deref() == Some(c.conversation_id.as_str())
-                }
-                ConvFilter::PinnedOnly => c.pinned,
-            })
-            .collect();
+        let filtered = self.filtered_conversations();
 
         let mut conv_col = column![].spacing(1).padding(Padding {
             top: 0.0,
-            right: 6.0,
+            right: 0.0,
             bottom: 12.0,
             left: 0.0,
         });
@@ -314,13 +302,21 @@ impl App {
         }
 
         // 내비게이션 + 노트북 + 전체 목록을 하나의 자연스러운 스크롤 컨테이너로 구성 (원본과 동일)
+        // 우측 8px 패딩으로 얇은 스크롤바와 필터·⋮ 아이콘이 겹쳐 잘리지 않도록 여유를 확보한다.
         let scroll_content = column![nav_col, nb_col, conv_header, conv_col]
             .spacing(2)
+            .padding(Padding {
+                top: 0.0,
+                right: 8.0,
+                bottom: 0.0,
+                left: 0.0,
+            })
             .width(Fill);
 
         let body_scroll = scrollable(scroll_content)
             .height(Fill)
             .width(Fill)
+            .on_scroll(|vp| Message::SidebarScrolled(vp.absolute_offset().y))
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::default().width(4).scroller_width(4),
             ))
@@ -495,6 +491,22 @@ impl App {
         .into()
     }
 
+    pub(crate) fn filtered_conversations(&self) -> Vec<&ConversationSummary> {
+        self.conversations
+            .iter()
+            .filter(|c| match self.conv_filter {
+                ConvFilter::All => true,
+                ConvFilter::Ready => !c.has_unread,
+                ConvFilter::NeedsAttention => c.has_unread,
+                ConvFilter::InProgress => {
+                    self.is_streaming
+                        && self.active_conv_id.as_deref() == Some(c.conversation_id.as_str())
+                }
+                ConvFilter::PinnedOnly => c.pinned,
+            })
+            .collect()
+    }
+
     fn view_conv_item<'a>(&'a self, c: &'a ConversationSummary) -> Element<'a, Message> {
         let pal = &self.palette;
         let is_active = self.active_section == ActiveSection::Chat
@@ -510,7 +522,6 @@ impl App {
         let text_secondary = pal.text_secondary;
         let text_muted = pal.text_muted;
         let accent = pal.accent;
-        let danger = pal.danger;
 
         if is_renaming {
             let input = text_input(t(self.locale, "새 제목"), &self.rename_draft)
@@ -550,45 +561,103 @@ impl App {
                 .into();
         }
 
+        let is_hovered =
+            self.hovered_conv_id.as_deref() == Some(c.conversation_id.as_str());
         let is_menu_target =
             self.conv_menu_target.as_deref() == Some(c.conversation_id.as_str());
+        let show_more = is_active || is_hovered || is_menu_target;
         let raw_title = if c.title.is_empty() {
             c.conversation_id.as_str()
         } else {
             c.title.as_str()
         };
         let has_right_badge = c.pinned || c.has_unread;
-        let base_units = if is_active || is_menu_target {
+        let base_units = if show_more && c.pinned {
+            22
+        } else if show_more {
             24
         } else if has_right_badge {
-            25
+            27
         } else {
-            28
+            30
         };
         let display_title =
             truncate_single_line(raw_title, sidebar_text_units(self.sidebar_width, base_units));
 
-        let mut btn_content = row![
-            text(display_title)
-                .size(13)
-                .font(if is_active || c.has_unread {
-                    font_medium()
-                } else {
-                    font_regular()
-                })
-                .color(if is_active || c.has_unread {
-                    text_strong
-                } else {
-                    text_primary
-                })
-                .wrapping(text::Wrapping::None),
-            space::horizontal(),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        // 원본 앱과 동일하게 안읽음(unread)은 일반 글꼴 굵기 + 파란 점으로 표시하고,
+        // 선택된 행만 medium 굵기 + 강조 텍스트를 적용한다.
+        let title_btn = button(
+            row![
+                text(display_title)
+                    .size(13)
+                    .font(if is_active {
+                        font_medium()
+                    } else {
+                        font_regular()
+                    })
+                    .color(if is_active {
+                        text_strong
+                    } else {
+                        text_primary
+                    })
+                    .wrapping(text::Wrapping::None),
+                space::horizontal(),
+            ]
+            .align_y(Alignment::Center)
+            .width(Fill),
+        )
+        .on_press(Message::SelectConversation(
+            c.conversation_id.clone(),
+            c.title.clone(),
+        ))
+        .width(Fill)
+        .padding(Padding {
+            top: 6.0,
+            right: if show_more || has_right_badge { 4.0 } else { 10.0 },
+            bottom: 6.0,
+            left: 10.0,
+        })
+        .style(move |_, _| button::Style {
+            background: None,
+            text_color: if is_active { text_strong } else { text_primary },
+            ..button::Style::default()
+        });
 
-        if c.pinned {
-            btn_content = btn_content.push(Icon::Pin.view(13.0, text_secondary));
+        let mut row_items = row![title_btn]
+            .spacing(2)
+            .align_y(Alignment::Center)
+            .width(Fill);
+
+        if show_more {
+            if c.pinned {
+                row_items = row_items.push(Icon::Pin.view(12.5, text_secondary));
+            }
+            let more_hover_bg = if is_active { bg_active } else { bg_nav_active };
+            let more_btn = button(
+                container(Icon::MoreVert.view(15.0, text_primary)).center(Fill),
+            )
+            .on_press(Message::OpenConvMenu(c.conversation_id.clone()))
+            .padding(0)
+            .width(Length::Fixed(24.0))
+            .height(Length::Fixed(24.0))
+            .style(move |_, status| ghost_btn_style(status, more_hover_bg, text_primary, 12.0));
+            row_items = row_items.push(
+                container(more_btn).padding(Padding {
+                    top: 0.0,
+                    right: 4.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
+            );
+        } else if c.pinned {
+            row_items = row_items.push(
+                container(Icon::Pin.view(13.0, text_secondary)).padding(Padding {
+                    top: 0.0,
+                    right: 10.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
+            );
         } else if c.has_unread {
             let unread_dot = container(space::horizontal())
                 .width(Length::Fixed(6.5))
@@ -601,51 +670,37 @@ impl App {
                     },
                     ..container::Style::default()
                 });
-            btn_content = btn_content.push(unread_dot);
+            row_items = row_items.push(
+                container(unread_dot).padding(Padding {
+                    top: 0.0,
+                    right: 10.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
+            );
         }
 
-        let select_btn = button(btn_content)
-            .on_press(Message::SelectConversation(
-                c.conversation_id.clone(),
-                c.title.clone(),
-            ))
+        // 행 전체를 일체형 둥근 필로 감싸 `⋮` 버튼이 배경 안쪽 우측에 자연스럽게 들어가도록 한다.
+        let pill = container(row_items)
             .width(Fill)
-            .padding([6, 10])
-            .style(move |_, status| {
-                let bg = if is_active || is_menu_target {
+            .style(move |_| container::Style {
+                background: if is_active {
                     Some(Background::Color(bg_nav_active))
-                } else if matches!(status, button::Status::Hovered) {
+                } else if is_hovered || is_menu_target {
                     Some(Background::Color(bg_hover))
                 } else {
                     None
-                };
-                button::Style {
-                    background: bg,
-                    text_color: if is_active { text_strong } else { text_primary },
-                    border: Border {
-                        radius: 16.0.into(),
-                        ..Border::default()
-                    },
-                    ..button::Style::default()
-                }
+                },
+                border: Border {
+                    radius: 16.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
             });
 
-        let more_icon_color = if is_active || is_menu_target {
-            text_primary
-        } else {
-            text_muted
-        };
-        let more_btn = button(container(Icon::MoreVert.view(15.0, more_icon_color)).center(Fill))
-            .on_press(Message::OpenConvMenu(c.conversation_id.clone()))
-            .padding(0)
-            .width(Length::Fixed(24.0))
-            .height(Length::Fixed(24.0))
-            .style(move |_, status| ghost_btn_style(status, bg_hover, more_icon_color, 12.0));
-
-        let _ = danger;
-        row![select_btn, more_btn]
-            .spacing(1)
-            .align_y(Alignment::Center)
+        mouse_area(pill)
+            .on_enter(Message::HoverConv(c.conversation_id.clone()))
+            .on_exit(Message::LeaveConv(c.conversation_id.clone()))
             .into()
     }
 }

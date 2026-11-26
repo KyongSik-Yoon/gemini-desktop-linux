@@ -267,3 +267,40 @@ func TestEncodeAndDecodeDriveAttachment(t *testing.T) {
 		t.Fatalf("드라이브 첨부 디코딩 값 불일치: %+v", decoded[0])
 	}
 }
+
+func TestDecodeModelResponseExtractsFollowUpAndElicitations(t *testing.T) {
+	displayRaw := "오늘 파주는 맑고 쌀쌀합니다.\n\n" +
+		`<FollowUp label="옷차림 가이드를 정리해 드릴까요?" query="파주 날씨에 맞는 옷차림 가이드를 정리해 주세요."/>` + "\n\n" +
+		`<ElicitationsGroup message="추가로 살펴볼 수 있는 내용입니다:">` + "\n" +
+		`  <Elicitation label="기온별 옷차림 기준표" query="기온별 추천 옷차림 기준표를 만들어 주세요."/>` + "\n" +
+		`  <Elicitation label="11월 평년 기후 특징" query="파주시 11월 평년 기후 특징을 알려 주세요."/>` + "\n" +
+		`</ElicitationsGroup>`
+	cleanRaw := "오늘 파주는 맑고 쌀쌀합니다.\n\n옷차림 가이드를 정리해 드릴까요?\n\n추가로 살펴볼 수 있는 내용입니다:\n기온별 옷차림 기준표\n11월 평년 기후 특징"
+
+	dt := NewBuilder()
+	dt.AppendString(1, displayRaw)
+	mr := NewBuilder()
+	mr.AppendString(1, "rc_weather")
+	mr.AppendMessage(2, dt.Bytes())
+	mr.AppendString(4, cleanRaw)
+
+	got := decodeModelResponse(mr.Bytes())
+	if got.Text != "오늘 파주는 맑고 쌀쌀합니다." {
+		t.Fatalf("후속 태그 분리 후 본문 불일치: %q", got.Text)
+	}
+	if got.FollowUp == nil || got.FollowUp.Label != "옷차림 가이드를 정리해 드릴까요?" ||
+		got.FollowUp.Query != "파주 날씨에 맞는 옷차림 가이드를 정리해 주세요." {
+		t.Fatalf("FollowUp 파싱 불일치: %+v", got.FollowUp)
+	}
+	if got.Elicitations == nil || got.Elicitations.Message != "추가로 살펴볼 수 있는 내용입니다:" ||
+		len(got.Elicitations.Items) != 2 || got.Elicitations.Items[1].Label != "11월 평년 기후 특징" {
+		t.Fatalf("ElicitationsGroup 파싱 불일치: %+v", got.Elicitations)
+	}
+
+	// 스트리밍 도중 미완성 꼬리 태그가 본문에 원시 XML로 노출되지 않아야 한다.
+	partial := "답변 본문입니다.\n\n<ElicitationsGroup message=\"추가 탐색\">\n  <Elicitation label=\"항목"
+	cleaned, fu, el, had := extractInteractiveSuggestions(partial)
+	if !had || fu != nil || el != nil || cleaned != "답변 본문입니다." {
+		t.Fatalf("스트리밍 미완성 태그 마스킹 실패: cleaned=%q fu=%+v el=%+v had=%v", cleaned, fu, el, had)
+	}
+}

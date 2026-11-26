@@ -2,11 +2,19 @@ package proto
 
 import (
 	"fmt"
+	"html"
 	"regexp"
 	"strings"
 )
 
-var spanTagRe = regexp.MustCompile(`\[span_\d+\]\((?:start|end)_span\)`)
+var (
+	spanTagRe                 = regexp.MustCompile(`\[span_\d+\]\((?:start|end)_span\)`)
+	followUpTagRe             = regexp.MustCompile(`(?s)<FollowUp\b([^>]*?)/>`)
+	elicitationsGroupRe       = regexp.MustCompile(`(?s)<ElicitationsGroup\b([^>]*)>(.*?)</ElicitationsGroup>`)
+	elicitationItemRe         = regexp.MustCompile(`(?s)<Elicitation\b([^>]*?)/>`)
+	xmlAttrRe                 = regexp.MustCompile(`([A-Za-z0-9_:-]+)\s*=\s*"([^"]*)"`)
+	incompleteInteractiveRe   = regexp.MustCompile(`(?s)<(?:FollowUp|ElicitationsGroup|Elicitation)\b[^>]*$|<ElicitationsGroup\b[^>]*>[\s\S]*$`)
+)
 
 // RobinService 대화 클라이언트 열거형 상수
 const (
@@ -261,6 +269,24 @@ type TurnArtifact struct {
 	URL      string `json:"url,omitempty"`
 }
 
+// FollowUpPrompt는 모델 응답 하단의 단일 확인형 후속 제안(<FollowUp>)이다.
+type FollowUpPrompt struct {
+	Label string `json:"label"`
+	Query string `json:"query"`
+}
+
+// ElicitationItem은 후속 탐색 제안 카드(<Elicitation>) 단일 항목이다.
+type ElicitationItem struct {
+	Label string `json:"label"`
+	Query string `json:"query"`
+}
+
+// ElicitationsGroup은 후속 탐색 제안 카드 그룹(<ElicitationsGroup>)이다.
+type ElicitationsGroup struct {
+	Message string            `json:"message,omitempty"`
+	Items   []ElicitationItem `json:"items"`
+}
+
 // ConversationTurn은 대화방 내 단일 질문-응답 턴이다.
 type ConversationTurn struct {
 	ConversationID   string               `json:"conversation_id"`
@@ -276,12 +302,15 @@ type ConversationTurn struct {
 	ToolActivities   []RemoteToolActivity `json:"tool_activities,omitempty"`
 	GeneratedImages  []GeneratedImage     `json:"generated_images,omitempty"`
 	Artifacts        []TurnArtifact       `json:"artifacts,omitempty"`
+	FollowUp         *FollowUpPrompt      `json:"follow_up,omitempty"`
+	Elicitations     *ElicitationsGroup   `json:"elicitations,omitempty"`
 	IsScheduledRun   bool                 `json:"is_scheduled_run,omitempty"`
 	ScheduledTitle   string               `json:"scheduled_title,omitempty"`
-	ModelAttribution string               `json:"model_attribution,omitempty"`
-	BardModeID       string               `json:"bard_mode_id,omitempty"`
-	Aborted          bool                 `json:"aborted,omitempty"`
-	TimestampUnix    int64                `json:"timestamp_unix"`
+	ModelAttribution  string               `json:"model_attribution,omitempty"`
+	BardModeID        string               `json:"bard_mode_id,omitempty"`
+	CompletenessState int32                `json:"completeness_state,omitempty"`
+	Aborted           bool                 `json:"aborted,omitempty"`
+	TimestampUnix     int64                `json:"timestamp_unix"`
 }
 
 // ListConversationTurnsResult는 ListConversationTurns 응답 결과다.
@@ -399,9 +428,12 @@ func decodeConversationTurn(data []byte) (ConversationTurn, error) {
 			t.ResponseID = chosen.ResponseID
 			t.ModelText = chosen.Text
 			t.Thoughts = chosen.Thoughts
+			t.CompletenessState = chosen.CompletenessState
 			if len(chosen.Artifacts) > 0 {
 				t.Artifacts = chosen.Artifacts
 			}
+			t.FollowUp = chosen.FollowUp
+			t.Elicitations = chosen.Elicitations
 		case 5: // Timestamp
 			t.TimestampUnix = decodeTimestampSeconds(f.Bytes)
 		case 17: // 예약 실행 메타데이터 (f1 == 1)
@@ -516,7 +548,120 @@ type decodedModelResponse struct {
 	Text              string
 	Thoughts          string
 	Artifacts         []TurnArtifact
+	FollowUp          *FollowUpPrompt
+	Elicitations      *ElicitationsGroup
 	CompletenessState int32
+}
+
+func parseXMLAttrs(raw string) map[string]string {
+	matches := xmlAttrRe.FindAllStringSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(matches))
+	for _, m := range matches {
+		out[m[1]] = strings.TrimSpace(html.UnescapeString(m[2]))
+	}
+	return out
+}
+
+// extractInteractiveSuggestions는 DisplayText(f2)에 포함된 <FollowUp> 및 <ElicitationsGroup>
+// 태그를 구조화된 후속 제안으로 분리하고 본문에서 해당 XML 블록과 미완성 스트리밍 꼬리를 제거한다.
+func extractInteractiveSuggestions(raw string) (string, *FollowUpPrompt, *ElicitationsGroup, bool) {
+	if !strings.Contains(raw, "<FollowUp") &&
+		!strings.Contains(raw, "<ElicitationsGroup") &&
+		!strings.Contains(raw, "<Elicitation") {
+		return raw, nil, nil, false
+	}
+
+	var followUp *FollowUpPrompt
+	var elicitations *ElicitationsGroup
+	hadTag := false
+
+	cleaned := followUpTagRe.ReplaceAllStringFunc(raw, func(match string) string {
+		hadTag = true
+		sub := followUpTagRe.FindStringSubmatch(match)
+		if len(sub) >= 2 && followUp == nil {
+			attrs := parseXMLAttrs(sub[1])
+			label := attrs["label"]
+			query := attrs["query"]
+			if query == "" {
+				query = label
+			}
+			if label != "" {
+				followUp = &FollowUpPrompt{Label: label, Query: query}
+			}
+		}
+		return ""
+	})
+
+	cleaned = elicitationsGroupRe.ReplaceAllStringFunc(cleaned, func(match string) string {
+		hadTag = true
+		sub := elicitationsGroupRe.FindStringSubmatch(match)
+		if len(sub) >= 3 {
+			attrs := parseXMLAttrs(sub[1])
+			msg := attrs["message"]
+			var items []ElicitationItem
+			for _, im := range elicitationItemRe.FindAllStringSubmatch(sub[2], -1) {
+				if len(im) < 2 {
+					continue
+				}
+				ia := parseXMLAttrs(im[1])
+				label := ia["label"]
+				query := ia["query"]
+				if query == "" {
+					query = label
+				}
+				if label != "" {
+					items = append(items, ElicitationItem{Label: label, Query: query})
+				}
+			}
+			if len(items) > 0 && elicitations == nil {
+				elicitations = &ElicitationsGroup{Message: msg, Items: items}
+			}
+		}
+		return ""
+	})
+
+	// 스트리밍 도중 닫히지 않은 꼬리 태그가 본문에 원시 XML로 노출되지 않도록 마스킹한다.
+	if loc := incompleteInteractiveRe.FindStringIndex(cleaned); loc != nil {
+		hadTag = true
+		cleaned = cleaned[:loc[0]]
+	}
+
+	cleaned = strings.TrimRight(cleaned, " \t\r\n")
+	return cleaned, followUp, elicitations, hadTag
+}
+
+// stripFlattenedSuggestions는 서버 정제 텍스트(f4) 꼬리에 평문화되어 붙은
+// FollowUp/ElicitationsGroup 라벨을 제거해 본문과 카드 중복 표시를 방지한다.
+func stripFlattenedSuggestions(clean string, followUp *FollowUpPrompt, elicitations *ElicitationsGroup) (string, bool) {
+	trimmed := strings.TrimRight(clean, " \t\r\n")
+	strippedAny := false
+
+	if elicitations != nil && len(elicitations.Items) > 0 {
+		var lines []string
+		if elicitations.Message != "" {
+			lines = append(lines, elicitations.Message)
+		}
+		for _, item := range elicitations.Items {
+			lines = append(lines, item.Label)
+		}
+		suffix := strings.Join(lines, "\n")
+		if strings.HasSuffix(trimmed, suffix) {
+			trimmed = strings.TrimRight(strings.TrimSuffix(trimmed, suffix), " \t\r\n")
+			strippedAny = true
+		}
+	}
+
+	if followUp != nil && followUp.Label != "" {
+		if strings.HasSuffix(trimmed, followUp.Label) {
+			trimmed = strings.TrimRight(strings.TrimSuffix(trimmed, followUp.Label), " \t\r\n")
+			strippedAny = true
+		}
+	}
+
+	return trimmed, strippedAny
 }
 
 func decodeModelResponse(data []byte) decodedModelResponse {
@@ -550,7 +695,22 @@ func decodeModelResponse(data []byte) decodedModelResponse {
 			out.CompletenessState = int32(f.Varint)
 		}
 	}
-	if cleanText != "" {
+
+	strippedDisplay, followUp, elicitations, hadInteractive := extractInteractiveSuggestions(displayText)
+	out.FollowUp = followUp
+	out.Elicitations = elicitations
+
+	if hadInteractive {
+		if cleanText != "" {
+			if cleaned, ok := stripFlattenedSuggestions(cleanText, followUp, elicitations); ok {
+				out.Text = cleaned
+			} else {
+				out.Text = strings.TrimRight(spanTagRe.ReplaceAllString(strippedDisplay, ""), " \t\r\n")
+			}
+		} else {
+			out.Text = strings.TrimRight(spanTagRe.ReplaceAllString(strippedDisplay, ""), " \t\r\n")
+		}
+	} else if cleanText != "" {
 		out.Text = cleanText
 	} else {
 		out.Text = spanTagRe.ReplaceAllString(displayText, "")
@@ -875,6 +1035,8 @@ type ChatStreamChunk struct {
 	StatusText        string               `json:"status_text,omitempty"`
 	ToolActivities    []RemoteToolActivity `json:"tool_activities,omitempty"`
 	Artifacts         []TurnArtifact       `json:"artifacts,omitempty"`
+	FollowUp          *FollowUpPrompt      `json:"follow_up,omitempty"`
+	Elicitations      *ElicitationsGroup   `json:"elicitations,omitempty"`
 	TargetDeviceName  string               `json:"target_device_name,omitempty"`
 	Title             string               `json:"title,omitempty"`
 	ModelAttribution  string               `json:"model,omitempty"`
@@ -960,6 +1122,8 @@ func decodeClientGenerateResponse(data []byte) ChatStreamChunk {
 				if len(mr.Artifacts) > 0 {
 					chunk.Artifacts = mr.Artifacts
 				}
+				chunk.FollowUp = mr.FollowUp
+				chunk.Elicitations = mr.Elicitations
 				chunk.CompletenessState = mr.CompletenessState
 			}
 		case 2: // ResponseIdentifiers

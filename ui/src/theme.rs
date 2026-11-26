@@ -631,7 +631,7 @@ fn hex(v: u32) -> Color {
     Color::from_rgb(r, g, b)
 }
 
-fn mix(a: Color, b: Color, t: f32) -> Color {
+pub(crate) fn mix(a: Color, b: Color, t: f32) -> Color {
     let t = t.clamp(0.0, 1.0);
     Color::from_rgba(
         a.r + (b.r - a.r) * t,

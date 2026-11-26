@@ -94,8 +94,8 @@ func (d *Daemon) recordToolEvent(ev robin.ToolExecEvent) {
 	case "started":
 		d.currentTool = ev.ToolName
 		d.currentToolArgs = ev.ArgsBrief
-	case "finished", "error", "session_ended":
-		if ev.Phase == "session_ended" || d.currentTool == ev.ToolName {
+	case "finished", "error", "session_ended", "turn_completed":
+		if ev.Phase == "session_ended" || ev.Phase == "turn_completed" || d.currentTool == ev.ToolName {
 			d.currentTool = ""
 			d.currentToolArgs = ""
 		}
@@ -119,6 +119,15 @@ func (d *Daemon) recordToolEvent(ev robin.ToolExecEvent) {
 func (d *Daemon) notifyStatusChanged(toolName string) {
 	d.recordToolEvent(robin.ToolExecEvent{
 		ToolName:      toolName,
+		Phase:         "status_changed",
+		TimestampUnix: time.Now().Unix(),
+	})
+}
+
+func (d *Daemon) notifyConversationUpdated(convID string) {
+	d.recordToolEvent(robin.ToolExecEvent{
+		SessionID:     convID,
+		ToolName:      "conversations_updated",
 		Phase:         "status_changed",
 		TimestampUnix: time.Now().Unix(),
 	})
